@@ -1,0 +1,71 @@
+apiVersion: anywhere.eks.amazonaws.com/v1alpha1
+kind: Cluster
+metadata:
+  name: junecao-bottlerocket
+spec:
+  clusterNetwork:
+    cniConfig:
+      cilium: {}
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+    services:
+      cidrBlocks:
+      - 10.96.0.0/12
+  controlPlaneConfiguration:
+    count: 2
+    endpoint:
+      host: 195.16.99.17
+    machineGroupRef:
+      kind: VSphereMachineConfig
+      name: junecao-bottlerocket
+  datacenterRef:
+    kind: VSphereDatacenterConfig
+    name: junecao-bottlerocket
+  externalEtcdConfiguration:
+    count: 3
+    machineGroupRef:
+      kind: VSphereMachineConfig
+      name: junecao-bottlerocket
+  kubernetesVersion: "1.31"
+  managementCluster:
+    name: junecao-bottlerocket
+  workerNodeGroupConfigurations:
+  - count: 3
+    machineGroupRef:
+      kind: VSphereMachineConfig
+      name: junecao-bottlerocket
+    name: md-0
+
+---
+apiVersion: anywhere.eks.amazonaws.com/v1alpha1
+kind: VSphereDatacenterConfig
+metadata:
+  name: junecao-bottlerocket
+spec:
+  datacenter: SDDC-Datacenter
+  insecure: false
+  network: /SDDC-Datacenter/network/sddc-cgw-network-4
+  server: vcenter.sddc-44-239-186-141.vmwarevmc.com
+  thumbprint: F5:23:E7:EA:92:FA:8D:9E:CA:E5:D6:CB:AD:74:0B:A0:CB:D4:34:50
+
+---
+apiVersion: anywhere.eks.amazonaws.com/v1alpha1
+kind: VSphereMachineConfig
+metadata:
+  name: junecao-bottlerocket
+spec:
+  cloneMode: fullClone
+  datastore: /SDDC-Datacenter/datastore/WorkloadDatastore
+  diskGiB: 25
+  folder: /SDDC-Datacenter/vm/capv/junecao-bottlerocket
+  memoryMiB: 8192
+  numCPUs: 2
+  osFamily: bottlerocket
+  resourcePool: /SDDC-Datacenter/host/Cluster-1/Resources/Compute-ResourcePool
+  users:
+  - name: ec2-user
+    sshAuthorizedKeys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVp3SuCaJo58A75Kwwlvkye7d8tfJq4x043hwgWfh3F junecao-bottlerocket@6c7e67c37706
+
+---

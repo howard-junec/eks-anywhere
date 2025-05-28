@@ -1,0 +1,91 @@
+apiVersion: anywhere.eks.amazonaws.com/v1alpha1
+kind: Cluster
+metadata:
+  annotations:
+    anywhere.eks.amazonaws.com/managed-by-cli: "true"
+    anywhere.eks.amazonaws.com/management-components-version: v0.22.4
+  name: junecao
+  namespace: default
+spec:
+  clusterNetwork:
+    cniConfig:
+      cilium: {}
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+    services:
+      cidrBlocks:
+      - 10.96.0.0/12
+  controlPlaneConfiguration:
+    count: 2
+    endpoint:
+      host: 195.16.99.15
+    machineGroupRef:
+      kind: VSphereMachineConfig
+      name: junecao
+    machineHealthCheck:
+      maxUnhealthy: 100%
+  datacenterRef:
+    kind: VSphereDatacenterConfig
+    name: junecao
+  eksaVersion: v0.22.4
+  externalEtcdConfiguration:
+    count: 3
+    machineGroupRef:
+      kind: VSphereMachineConfig
+      name: junecao
+  kubernetesVersion: "1.31"
+  machineHealthCheck:
+    maxUnhealthy: 100%
+    nodeStartupTimeout: 10m0s
+    unhealthyMachineTimeout: 5m0s
+  managementCluster:
+    name: junecao
+  workerNodeGroupConfigurations:
+  - count: 3
+    machineGroupRef:
+      kind: VSphereMachineConfig
+      name: junecao
+    machineHealthCheck:
+      maxUnhealthy: 40%
+    name: md-0
+
+---
+apiVersion: anywhere.eks.amazonaws.com/v1alpha1
+kind: VSphereDatacenterConfig
+metadata:
+  name: junecao
+  namespace: default
+spec:
+  datacenter: SDDC-Datacenter
+  insecure: false
+  network: /SDDC-Datacenter/network/sddc-cgw-network-4
+  server: vcenter.sddc-44-239-186-141.vmwarevmc.com
+  thumbprint: F5:23:E7:EA:92:FA:8D:9E:CA:E5:D6:CB:AD:74:0B:A0:CB:D4:34:50
+
+---
+apiVersion: anywhere.eks.amazonaws.com/v1alpha1
+kind: VSphereMachineConfig
+metadata:
+  annotations:
+    anywhere.eks.amazonaws.com/control-plane: "true"
+    anywhere.eks.amazonaws.com/etcd: "true"
+  name: junecao
+  namespace: default
+spec:
+  cloneMode: fullClone
+  datastore: /SDDC-Datacenter/datastore/WorkloadDatastore
+  diskGiB: 25
+  folder: /SDDC-Datacenter/vm/capv/junecao
+  memoryMiB: 8192
+  numCPUs: 2
+  osFamily: bottlerocket
+  resourcePool: /SDDC-Datacenter/host/Cluster-1/Resources/Compute-ResourcePool
+  template: /SDDC-Datacenter/vm/Templates/bottlerocket-v1.31.6-kubernetes-1-31-eks-18-amd64-eb27ef0
+  users:
+  - name: ec2-user
+    sshAuthorizedKeys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVp3SuCaJo58A75Kwwlvkye7d8tfJq4x043hwgWfh3F
+      junecao@6c7e67c37706
+
+---
