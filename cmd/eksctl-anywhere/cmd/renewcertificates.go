@@ -81,6 +81,9 @@ func (rc *renewCertificatesOptions) renewCertificates(cmd *cobra.Command) error 
 		Name: config.ClusterName,
 	}
 
-	renewer := certificates.NewRenewer()
+	renewer, err := certificates.NewRenewer()
+	if err != nil {
+		return fmt.Errorf("failed to create renewer: %v", err)
+	}
 	return renewer.RenewCertificates(cmd.Context(), cluster, config, rc.component)
 }

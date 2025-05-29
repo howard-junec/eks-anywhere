@@ -43,15 +43,29 @@ type Renewer struct {
 	sshDialer  sshDialer
 }
 
-func NewRenewer() *Renewer {
+func NewRenewer() (*Renewer, error) {
 	backupDate := time.Now().Format("20060102_150405")
+	backupDir := fmt.Sprintf("certificate_backup_%s", backupDate)
+	fmt.Printf("Creating backup directory: %s\n", backupDir)
+
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create backup directory: %v", err)
+	}
+
+	etcdCertsPath := filepath.Join(backupDir, tempLocalEtcdCertsDir)
+	fmt.Printf("Creating etcd certs directory: %s\n", etcdCertsPath)
+
+	if err := os.MkdirAll(etcdCertsPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create etcd certs directory: %v", err)
+	}
+
 	r := &Renewer{
-		backupDir: fmt.Sprintf("certificate_backup_%s", backupDate),
+		backupDir: backupDir,
 		sshDialer: func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
 			return ssh.Dial(network, addr, config)
 		},
 	}
-	return r
+	return r, nil
 }
 
 func (r *Renewer) RenewCertificates(ctx context.Context, cluster *types.Cluster, config *RenewalConfig, component string) error {
@@ -66,15 +80,6 @@ func (r *Renewer) RenewCertificates(ctx context.Context, cluster *types.Cluster,
 
 	if err := r.checkAPIServerReachability(ctx); err != nil {
 		return fmt.Errorf("API server health check failed: %v", err)
-	}
-
-	if err := os.MkdirAll(r.backupDir, 0700); err != nil {
-		return fmt.Errorf("failed to create backup directory: %v", err)
-	}
-
-	etcdCertsPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir)
-	if err := os.MkdirAll(etcdCertsPath, 0700); err != nil {
-		return fmt.Errorf("failed to create etcd certs directory: %v", err)
 	}
 
 	fmt.Printf("✅ Backing up kubeadm-config ConfigMap...\n")
@@ -145,6 +150,19 @@ func (r *Renewer) checkAPIServerReachability(ctx context.Context) error {
 	return fmt.Errorf("kubernetes API server is not reachable")
 }
 
+// func (r *Renewer) backupKubeadmConfig(ctx context.Context) error {
+// 	cm, err := r.kubeClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "kubeadm-config", metav1.GetOptions{})
+// 	if err != nil {
+// 		return fmt.Errorf("failed to get kubeadm-config: %v", err)
+// 	}
+
+// 	backupPath := filepath.Join(r.backupDir, "kubeadm-config.yaml")
+// 	if err := os.WriteFile(backupPath, []byte(cm.Data["ClusterConfiguration"]), 0600); err != nil {
+// 		return fmt.Errorf("failed to write kubeadm config backup: %v", err)
+// 	}
+
+//		return nil
+//	}
 func (r *Renewer) backupKubeadmConfig(ctx context.Context) error {
 	cm, err := r.kubeClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "kubeadm-config", metav1.GetOptions{})
 	if err != nil {
@@ -312,5 +330,6 @@ func (r *Renewer) runCommandWithOutput(ctx context.Context, client sshClient, cm
 }
 
 func (r *Renewer) cleanup() error {
+	fmt.Printf("Cleaning up directory: %s\n", r.backupDir)
 	return os.RemoveAll(r.backupDir)
 }
