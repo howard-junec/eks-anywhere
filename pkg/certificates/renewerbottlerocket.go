@@ -12,8 +12,21 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	persistentCertDir     = "/var/lib/eks-anywhere/certificates"
+	persistentEtcdCertDir = "etcd-certs"
+)
+
 func (r *Renewer) renewControlPlaneCertsBottlerocket(ctx context.Context, node string, config *RenewalConfig, component string) error {
 	fmt.Printf("Processing control plane node: %s...\n", node)
+
+	// for renew control panel only
+	if component == componentControlPlane && len(config.Etcd.Nodes) > 0 {
+		if err := r.loadCertsFromPersistentStorage(); err != nil {
+			return fmt.Errorf("failed to load certificates from persistent storage: %v", err)
+		}
+	}
+
 	client, err := r.sshDialer("tcp", fmt.Sprintf("%s:22", node), r.sshConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to node %s: %v", node, err)
@@ -303,6 +316,12 @@ EOF`, bottlerocketTmpDir)
 
 	fmt.Printf("✅ Completed renewing certificate for the ETCD node: %s.\n", node)
 	fmt.Printf("---------------------------------------------\n")
+
+	// save etcd cert for control panel renew
+	if err := r.saveCertsToPersistentStorage(); err != nil {
+		return fmt.Errorf("failed to save certificates to persistent storage: %v", err)
+	}
+
 	return nil
 }
 
@@ -429,5 +448,68 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 	}
 
 	fmt.Printf("✅ Successfully updated %s secret.\n", secretName)
+	return nil
+}
+
+// for renew control panel only
+func (r *Renewer) saveCertsToPersistentStorage() error {
+	srcCrt := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
+	srcKey := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
+
+	destDir := filepath.Join(persistentCertDir, persistentEtcdCertDir)
+	if err := os.MkdirAll(destDir, 0700); err != nil {
+		return fmt.Errorf("failed to create persistent directory: %v", err)
+	}
+
+	destCrt := filepath.Join(destDir, "apiserver-etcd-client.crt")
+	destKey := filepath.Join(destDir, "apiserver-etcd-client.key")
+
+	if err := copyFile(srcCrt, destCrt); err != nil {
+		return fmt.Errorf("failed to copy certificate: %v", err)
+	}
+	if err := copyFile(srcKey, destKey); err != nil {
+		return fmt.Errorf("failed to copy key: %v", err)
+	}
+
+	return nil
+}
+
+func (r *Renewer) loadCertsFromPersistentStorage() error {
+	srcDir := filepath.Join(persistentCertDir, persistentEtcdCertDir)
+	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		return fmt.Errorf("no etcd certificates found in persistent storage. Please run etcd certificate renewal first")
+	}
+
+	destDir := filepath.Join(r.backupDir, tempLocalEtcdCertsDir)
+	if err := os.MkdirAll(destDir, 0700); err != nil {
+		return fmt.Errorf("failed to create temporary directory: %v", err)
+	}
+
+	srcCrt := filepath.Join(srcDir, "apiserver-etcd-client.crt")
+	srcKey := filepath.Join(srcDir, "apiserver-etcd-client.key")
+
+	destCrt := filepath.Join(destDir, "apiserver-etcd-client.crt")
+	destKey := filepath.Join(destDir, "apiserver-etcd-client.key")
+
+	if err := copyFile(srcCrt, destCrt); err != nil {
+		return fmt.Errorf("failed to copy certificate: %v", err)
+	}
+	if err := copyFile(srcKey, destKey); err != nil {
+		return fmt.Errorf("failed to copy key: %v", err)
+	}
+
+	return nil
+}
+
+func copyFile(src, dest string) error {
+	input, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+
+	if err = os.WriteFile(dest, input, 0600); err != nil {
+		return err
+	}
+
 	return nil
 }
