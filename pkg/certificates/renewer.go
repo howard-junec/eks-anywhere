@@ -171,6 +171,10 @@ func (r *Renewer) renewEtcdCerts(ctx context.Context, config *RenewalConfig) err
 		}
 	}
 
+	if err := r.updateAPIServerEtcdClientSecret(ctx, config.ClusterName); err != nil {
+		return fmt.Errorf("failed to update apiserver-etcd-client secret: %v", err)
+	}
+
 	return nil
 }
 
