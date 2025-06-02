@@ -151,19 +151,6 @@ func (r *Renewer) checkAPIServerReachability(ctx context.Context) error {
 	return fmt.Errorf("kubernetes API server is not reachable")
 }
 
-// func (r *Renewer) backupKubeadmConfig(ctx context.Context) error {
-// 	cm, err := r.kubeClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "kubeadm-config", metav1.GetOptions{})
-// 	if err != nil {
-// 		return fmt.Errorf("failed to get kubeadm-config: %v", err)
-// 	}
-
-// 	backupPath := filepath.Join(r.backupDir, "kubeadm-config.yaml")
-// 	if err := os.WriteFile(backupPath, []byte(cm.Data["ClusterConfiguration"]), 0600); err != nil {
-// 		return fmt.Errorf("failed to write kubeadm config backup: %v", err)
-// 	}
-
-//		return nil
-//	}
 func (r *Renewer) backupKubeadmConfig(ctx context.Context) error {
 	cm, err := r.kubeClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "kubeadm-config", metav1.GetOptions{})
 	if err != nil {
