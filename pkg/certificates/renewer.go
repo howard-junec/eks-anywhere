@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -284,6 +285,10 @@ func (r *Renewer) runCommand(ctx context.Context, client sshClient, cmd string) 
 			return
 		}
 		defer session.Close()
+		// print shell session progress
+		session.Stdout = os.Stdout
+		session.Stderr = os.Stderr
+
 		done <- session.Run(cmd)
 	}()
 
@@ -331,5 +336,11 @@ func (r *Renewer) runCommandWithOutput(ctx context.Context, client sshClient, cm
 
 func (r *Renewer) cleanup() error {
 	fmt.Printf("Cleaning up directory: %s\n", r.backupDir)
+
+	chmodCmd := exec.Command("chmod", "-R", "u+w", r.backupDir)
+	if err := chmodCmd.Run(); err != nil {
+		return fmt.Errorf("failed to change permissions: %v", err)
+	}
+
 	return os.RemoveAll(r.backupDir)
 }
