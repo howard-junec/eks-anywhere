@@ -33,13 +33,12 @@ const (
 	componentControlPlane = "control-plane"
 )
 
-// sshDialer is a function type for creating SSH clients
 type sshDialer func(network, addr string, config *ssh.ClientConfig) (sshClient, error)
 
 type Renewer struct {
 	backupDir  string
 	sshConfig  *ssh.ClientConfig
-	sshKeyPath string // Store SSH key path from config
+	sshKeyPath string // store SSH key path from config
 	kubeClient kubernetes.Interface
 	sshDialer  sshDialer
 }
