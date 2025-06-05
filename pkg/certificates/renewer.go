@@ -256,7 +256,7 @@ func (r *Renewer) initSSHConfig(user, keyPath string, passwd string) error {
 
 func (r *Renewer) renewEtcdNodeCerts(ctx context.Context, node string, config NodeConfig) error {
 	switch config.OS {
-	case "ubuntu", "rhel":
+	case "ubuntu", "rhel", "redhat":
 		return r.renewEtcdCertsLinux(ctx, node)
 	case "bottlerocket":
 		return r.renewEtcdCertsBottlerocket(ctx, node)
@@ -267,7 +267,7 @@ func (r *Renewer) renewEtcdNodeCerts(ctx context.Context, node string, config No
 
 func (r *Renewer) renewControlPlaneNodeCerts(ctx context.Context, node string, config *RenewalConfig, component string) error {
 	switch config.ControlPlane.OS {
-	case "ubuntu", "rhel":
+	case "ubuntu", "rhel", "redhat":
 		return r.renewControlPlaneCertsLinux(ctx, node, config, component)
 	case "bottlerocket":
 		return r.renewControlPlaneCertsBottlerocket(ctx, node, config, component)
