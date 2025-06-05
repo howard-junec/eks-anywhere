@@ -2,14 +2,20 @@ package certificates
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
+
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
+}
 
 func TestParseConfig(t *testing.T) {
 	tests := []struct {
 		name        string
 		configYaml  string
 		expectError bool
+		errorMsg    string
 	}{
 		{
 			name: "valid config with both etcd and control plane",
@@ -78,6 +84,66 @@ controlPlane:
   sshUser: ec2-user
 `,
 			expectError: true,
+			errorMsg:    "unsupported OS",
+		},
+		{
+			name: "valid config with SSH password",
+			configYaml: `
+clusterName: test-cluster
+controlPlane:
+  nodes:
+  - 192.168.1.10
+  os: ubuntu
+  sshKey: /tmp/test-key
+  sshUser: ec2-user
+  sshPasswd: password123
+`,
+			expectError: false,
+		},
+		{
+			name: "valid config with redhat OS",
+			configYaml: `
+clusterName: test-cluster
+controlPlane:
+  nodes:
+  - 192.168.1.10
+  os: redhat
+  sshKey: /tmp/test-key
+  sshUser: ec2-user
+`,
+			expectError: false,
+		},
+		{
+			name: "valid config with bottlerocket OS",
+			configYaml: `
+clusterName: test-cluster
+controlPlane:
+  nodes:
+  - 192.168.1.10
+  os: bottlerocket
+  sshKey: /tmp/test-key
+  sshUser: ec2-user
+`,
+			expectError: false,
+		},
+		{
+			name: "valid config with different OS types",
+			configYaml: `
+clusterName: test-cluster
+controlPlane:
+  nodes:
+  - 192.168.1.10
+  os: ubuntu
+  sshKey: /tmp/test-key
+  sshUser: ec2-user
+etcd:
+  nodes:
+  - 192.168.1.20
+  os: bottlerocket
+  sshKey: /tmp/test-key
+  sshUser: ec2-user
+`,
+			expectError: false,
 		},
 	}
 
@@ -111,6 +177,9 @@ controlPlane:
 			}
 			if !tt.expectError && err != nil {
 				t.Errorf("unexpected error: %v", err)
+			}
+			if tt.expectError && err != nil && tt.errorMsg != "" && !contains(err.Error(), tt.errorMsg) {
+				t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
 			}
 		})
 	}
@@ -201,7 +270,7 @@ func TestValidateNodeConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create temporary SSH key file
+
 			if tt.config.SSHKey != "" {
 				if err := os.WriteFile(tt.config.SSHKey, []byte("test-key"), 0600); err != nil {
 					t.Fatal(err)
