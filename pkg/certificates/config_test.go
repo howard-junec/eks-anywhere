@@ -189,7 +189,6 @@ func TestValidateNodeConfig(t *testing.T) {
 	tests := []struct {
 		name        string
 		config      NodeConfig
-		component   string
 		expectError bool
 	}{
 		{
@@ -200,7 +199,6 @@ func TestValidateNodeConfig(t *testing.T) {
 				SSHKey:  "/tmp/test-key",
 				SSHUser: "ec2-user",
 			},
-			component:   "control plane",
 			expectError: false,
 		},
 		{
@@ -211,7 +209,6 @@ func TestValidateNodeConfig(t *testing.T) {
 				SSHKey:  "/tmp/test-key",
 				SSHUser: "ec2-user",
 			},
-			component:   "etcd",
 			expectError: false,
 		},
 		{
@@ -222,7 +219,6 @@ func TestValidateNodeConfig(t *testing.T) {
 				SSHKey:  "/tmp/test-key",
 				SSHUser: "ec2-user",
 			},
-			component:   "control plane",
 			expectError: false,
 		},
 		{
@@ -232,7 +228,6 @@ func TestValidateNodeConfig(t *testing.T) {
 				SSHKey:  "/tmp/test-key",
 				SSHUser: "ec2-user",
 			},
-			component:   "control plane",
 			expectError: true,
 		},
 		{
@@ -243,7 +238,6 @@ func TestValidateNodeConfig(t *testing.T) {
 				SSHKey:  "/tmp/test-key",
 				SSHUser: "ec2-user",
 			},
-			component:   "control plane",
 			expectError: true,
 		},
 		{
@@ -253,7 +247,6 @@ func TestValidateNodeConfig(t *testing.T) {
 				OS:      "ubuntu",
 				SSHUser: "ec2-user",
 			},
-			component:   "control plane",
 			expectError: true,
 		},
 		{
@@ -263,7 +256,6 @@ func TestValidateNodeConfig(t *testing.T) {
 				OS:     "ubuntu",
 				SSHKey: "/tmp/test-key",
 			},
-			component:   "control plane",
 			expectError: true,
 		},
 	}
@@ -278,7 +270,7 @@ func TestValidateNodeConfig(t *testing.T) {
 				defer os.Remove(tt.config.SSHKey)
 			}
 
-			err := validateNodeConfig(&tt.config, tt.component)
+			err := validateNodeConfig(&tt.config)
 			if tt.expectError && err == nil {
 				t.Error("expected error but got none")
 			}
