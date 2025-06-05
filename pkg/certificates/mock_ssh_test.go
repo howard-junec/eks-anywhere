@@ -8,7 +8,6 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Mock Client
 type MockClient struct {
 	ctrl     *gomock.Controller
 	recorder *MockClientRecorder
@@ -50,13 +49,11 @@ func (mr *MockClientRecorder) NewSession() *gomock.Call {
 	return mr.mock.ctrl.RecordCall(mr.mock, "NewSession")
 }
 
-// Required by ssh.Client interface
 func (m *MockClient) Dial(n, addr string) (net.Conn, error)              { return nil, nil }
 func (m *MockClient) Listen(n, addr string) (net.Listener, error)        { return nil, nil }
 func (m *MockClient) ListenTCP(laddr *net.TCPAddr) (net.Listener, error) { return nil, nil }
 func (m *MockClient) ListenUnix(addr string) (net.Listener, error)       { return nil, nil }
 
-// MockSession implements ssh.Session interface for testing
 type MockSession struct {
 	ctrl     *gomock.Controller
 	recorder *MockSessionRecorder
@@ -94,6 +91,17 @@ func (m *MockSession) Run(cmd string) error {
 
 func (mr *MockSessionRecorder) Run(cmd interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCall(mr.mock, "Run", cmd)
+}
+
+func (m *MockSession) Output(cmd string) ([]byte, error) {
+	ret := m.ctrl.Call(m, "Output", cmd)
+	ret0, _ := ret[0].([]byte)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (mr *MockSessionRecorder) Output(cmd interface{}) *gomock.Call {
+	return mr.mock.ctrl.RecordCall(mr.mock, "Output", cmd)
 }
 
 func (m *MockSession) RequestPty(term string, h, w uint, modes ssh.TerminalModes) error {
