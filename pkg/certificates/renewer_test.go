@@ -5,12 +5,13 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/aws/eks-anywhere/pkg/types"
 	"github.com/golang/mock/gomock"
 	"golang.org/x/crypto/ssh"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/aws/eks-anywhere/pkg/types"
 )
 
 var testCommands = []string{

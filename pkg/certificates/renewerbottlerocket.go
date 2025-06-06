@@ -326,7 +326,6 @@ EOF`, bottlerocketTmpDir)
 }
 
 func (r *Renewer) copyEtcdCerts(ctx context.Context, client sshClient, node string) error {
-
 	fmt.Printf("Reading certificate from ETCD node %s...\n", node)
 	fmt.Printf("Using backup directory: %s\n", r.backupDir)
 
@@ -376,10 +375,10 @@ EOF`, bottlerocketTmpDir)
 	fmt.Printf("Certificate: %s\n", crtPath)
 	fmt.Printf("Key: %s\n", keyPath)
 
-	if err := os.WriteFile(crtPath, []byte(crtContent), 0600); err != nil {
+	if err := os.WriteFile(crtPath, []byte(crtContent), 0o600); err != nil {
 		return fmt.Errorf("failed to write certificate file: %v", err)
 	}
-	if err := os.WriteFile(keyPath, []byte(keyContent), 0600); err != nil {
+	if err := os.WriteFile(keyPath, []byte(keyContent), 0o600); err != nil {
 		return fmt.Errorf("failed to write key file: %v", err)
 	}
 
@@ -451,13 +450,13 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 	return nil
 }
 
-// for renew control panel only
+// for renew control panel only.
 func (r *Renewer) saveCertsToPersistentStorage() error {
 	srcCrt := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
 	srcKey := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
 
 	destDir := filepath.Join(persistentCertDir, persistentEtcdCertDir)
-	if err := os.MkdirAll(destDir, 0700); err != nil {
+	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return fmt.Errorf("failed to create persistent directory: %v", err)
 	}
 
@@ -481,7 +480,7 @@ func (r *Renewer) loadCertsFromPersistentStorage() error {
 	}
 
 	destDir := filepath.Join(r.backupDir, tempLocalEtcdCertsDir)
-	if err := os.MkdirAll(destDir, 0700); err != nil {
+	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return fmt.Errorf("failed to create temporary directory: %v", err)
 	}
 
@@ -507,7 +506,7 @@ func copyFile(src, dest string) error {
 		return err
 	}
 
-	if err = os.WriteFile(dest, input, 0600); err != nil {
+	if err = os.WriteFile(dest, input, 0o600); err != nil {
 		return err
 	}
 

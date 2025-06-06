@@ -108,7 +108,7 @@ type ClusterMover interface {
 	Move(ctx context.Context, spec *cluster.Spec, srcClient, dstClient kubernetes.Client) error
 }
 
-// CertificateRenewer renew the certificates
+// CertificateRenewer renew the certificates.
 type CertificateRenewer interface {
 	RenewCertificates(ctx context.Context, cluster *types.Cluster,
 		config *certificates.RenewalConfig, component string) error

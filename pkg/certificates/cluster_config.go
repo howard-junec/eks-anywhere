@@ -13,13 +13,13 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// SSH configuration for the cluster
+// SSH configuration for the cluster.
 type clusterSSHConfig struct {
 	SSHKeyPath  string
 	SSHUsername string
 }
 
-// get SSH configuration from the cluster's configuration
+// get SSH configuration from the cluster's configuration.
 func getClusterConfig(clusterName string) (*clusterSSHConfig, error) {
 	clusterDir := filepath.Join(".", clusterName)
 	clusterConfigPath := filepath.Join(clusterDir, fmt.Sprintf("%s-eks-a-cluster.yaml", clusterName))
@@ -135,7 +135,7 @@ func getClusterConfig(clusterName string) (*clusterSSHConfig, error) {
 	return sshConfig, nil
 }
 
-// the RenewalConfig from a running cluster
+// the RenewalConfig from a running cluster.
 func BuildConfigFromCluster(clusterName, sshKeyPath string) (*RenewalConfig, error) {
 	if _, err := os.Stat(sshKeyPath); err != nil {
 		return nil, fmt.Errorf("SSH key file not found: %v", err)

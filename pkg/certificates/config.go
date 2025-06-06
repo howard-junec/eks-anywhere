@@ -1,14 +1,16 @@
+// Package certificates provides functionality for managing and renewing certificates in EKS Anywhere clusters.
 package certificates
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"gopkg.in/yaml.v2"
+
+	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 )
 
-// NodeConfig holds SSH configuration for a node group
+// NodeConfig holds SSH configuration for a node group.
 type NodeConfig struct {
 	Nodes     []string `yaml:"nodes"`
 	OS        string   `yaml:"os"`
@@ -17,12 +19,14 @@ type NodeConfig struct {
 	SSHPasswd string   `yaml:"sshPasswd,omitempty"` // Optional SSH key passphrase
 }
 
+// RenewalConfig defines the configuration for certificate renewal operations.
 type RenewalConfig struct {
 	ClusterName  string     `yaml:"clusterName"`
 	ControlPlane NodeConfig `yaml:"controlPlane"`
 	Etcd         NodeConfig `yaml:"etcd"`
 }
 
+// ParseConfig reads and parses a certificate renewal configuration file.
 func ParseConfig(path string) (*RenewalConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

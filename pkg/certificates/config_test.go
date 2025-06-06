@@ -165,7 +165,7 @@ etcd:
 
 			// Create temporary SSH key file
 			keyFile := "/tmp/test-key"
-			if err := os.WriteFile(keyFile, []byte("test-key"), 0600); err != nil {
+			if err := os.WriteFile(keyFile, []byte("test-key"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			defer os.Remove(keyFile)
@@ -270,9 +270,8 @@ func TestValidateNodeConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			if tt.config.SSHKey != "" {
-				if err := os.WriteFile(tt.config.SSHKey, []byte("test-key"), 0600); err != nil {
+				if err := os.WriteFile(tt.config.SSHKey, []byte("test-key"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				defer os.Remove(tt.config.SSHKey)

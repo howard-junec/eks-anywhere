@@ -45,9 +45,8 @@ func TestInitSSHConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			if tt.keyContent != "" {
-				if err := os.WriteFile(tt.keyPath, []byte(tt.keyContent), 0600); err != nil {
+				if err := os.WriteFile(tt.keyPath, []byte(tt.keyContent), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				defer os.Remove(tt.keyPath)
@@ -85,7 +84,7 @@ func TestInitSSHConfig(t *testing.T) {
 }
 
 // Test private key for SSH tests
-// This is a test key, not used for anything real
+// This is a test key, not used for anything real.
 var testPrivateKey = `-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 QyNTUxOQAAACBsETg9gZQ5dSy+4qy7Cg4Zx7bE+KFi0xQyNKTJiM4YHwAAAJg2zz0UNs89

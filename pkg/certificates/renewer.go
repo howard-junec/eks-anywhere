@@ -35,6 +35,7 @@ const (
 
 type sshDialer func(network, addr string, config *ssh.ClientConfig) (sshClient, error)
 
+// Renewer handles the certificate renewal process for EKS Anywhere clusters.
 type Renewer struct {
 	backupDir  string
 	sshConfig  *ssh.ClientConfig
@@ -43,19 +44,20 @@ type Renewer struct {
 	sshDialer  sshDialer
 }
 
+// NewRenewer creates a new certificate renewer instance with a timestamped backup directory.
 func NewRenewer() (*Renewer, error) {
 	backupDate := time.Now().Format("20060102_150405")
 	backupDir := fmt.Sprintf("certificate_backup_%s", backupDate)
 	fmt.Printf("Creating backup directory: %s\n", backupDir)
 
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating backup directory: %v", err)
 	}
 
 	etcdCertsPath := filepath.Join(backupDir, tempLocalEtcdCertsDir)
 	fmt.Printf("Creating etcd certs directory: %s\n", etcdCertsPath)
 
-	if err := os.MkdirAll(etcdCertsPath, 0755); err != nil {
+	if err := os.MkdirAll(etcdCertsPath, 0o755); err != nil {
 		return nil, fmt.Errorf("creating etcd certs directory: %v", err)
 	}
 
@@ -65,14 +67,20 @@ func NewRenewer() (*Renewer, error) {
 			return ssh.Dial(network, addr, config)
 		},
 	}
+
 	return r, nil
 }
 
-func (r *Renewer) RenewCertificates(ctx context.Context, cluster *types.Cluster, config *RenewalConfig, component string) error {
+// validateComponent checks if the specified component is valid.
+func validateComponent(component string) error {
 	if component != "" && component != componentEtcd && component != componentControlPlane {
 		return fmt.Errorf("invalid component %q, must be either %q or %q", component, componentEtcd, componentControlPlane)
 	}
+	return nil
+}
 
+// prepareRenewal initializes the Kubernetes client and checks API server reachability.
+func (r *Renewer) prepareRenewal(ctx context.Context) error {
 	fmt.Printf("✅ Checking if Kubernetes API server is reachable...\n")
 	if err := r.initKubeClient(); err != nil {
 		return fmt.Errorf("initializing kubernetes client: %v", err)
@@ -87,29 +95,49 @@ func (r *Renewer) RenewCertificates(ctx context.Context, cluster *types.Cluster,
 		return fmt.Errorf("backing up kubeadm config: %v", err)
 	}
 
-	if component == componentEtcd || component == "" {
-		if len(config.Etcd.Nodes) > 0 {
-			fmt.Printf("Starting etcd certificate renewal process...\n")
-			if err := r.renewEtcdCerts(ctx, config); err != nil {
-				return fmt.Errorf("renewing etcd certificates: %v", err)
-			}
-			fmt.Printf("🎉 Etcd certificate renewal process completed successfully.\n")
-		} else {
-			fmt.Printf("Cluster does not have external ETCD.\n")
-		}
+	return nil
+}
+
+// processEtcdRenewal handles the renewal of etcd certificates if needed.
+func (r *Renewer) processEtcdRenewal(ctx context.Context, config *RenewalConfig, component string) error {
+	if component != componentEtcd && component != "" {
+		return nil
 	}
 
-	if component == componentControlPlane || component == "" {
-		if len(config.ControlPlane.Nodes) == 0 {
-			return fmt.Errorf("❌ Error: No control plane node IPs found")
-		}
-		fmt.Printf("Starting control plane certificate renewal process...\n")
-		if err := r.renewControlPlaneCerts(ctx, config, component); err != nil {
-			return fmt.Errorf("renewing control plane certificates: %v", err)
-		}
-		fmt.Printf("🎉 Control plane certificate renewal process completed successfully.\n")
+	if len(config.Etcd.Nodes) == 0 {
+		fmt.Printf("Cluster does not have external ETCD.\n")
+		return nil
 	}
 
+	fmt.Printf("Starting etcd certificate renewal process...\n")
+	if err := r.renewEtcdCerts(ctx, config); err != nil {
+		return fmt.Errorf("renewing etcd certificates: %v", err)
+	}
+
+	fmt.Printf("🎉 Etcd certificate renewal process completed successfully.\n")
+	return nil
+}
+
+// processControlPlaneRenewal handles the renewal of control plane certificates if needed.
+func (r *Renewer) processControlPlaneRenewal(ctx context.Context, config *RenewalConfig, component string) error {
+	if component != componentControlPlane && component != "" {
+		return nil
+	}
+
+	if len(config.ControlPlane.Nodes) == 0 {
+		return fmt.Errorf("❌ Error: No control plane node IPs found")
+	}
+
+	fmt.Printf("Starting control plane certificate renewal process...\n")
+	if err := r.renewControlPlaneCerts(ctx, config, component); err != nil {
+		return fmt.Errorf("renewing control plane certificates: %v", err)
+	}
+	fmt.Printf("🎉 Control plane certificate renewal process completed successfully.\n")
+	return nil
+}
+
+// finishRenewal performs cleanup operations after certificate renewal.
+func (r *Renewer) finishRenewal() error {
 	fmt.Printf("✅ Cleaning up temporary files...\n")
 	if err := r.cleanup(); err != nil {
 		fmt.Printf("❌ API server unreachable — skipping cleanup to preserve debug data.\n")
@@ -117,6 +145,27 @@ func (r *Renewer) RenewCertificates(ctx context.Context, cluster *types.Cluster,
 	}
 	fmt.Printf("✅ All temporary files removed.\n")
 	return nil
+}
+
+// RenewCertificates orchestrates the certificate renewal process for EKS Anywhere clusters.
+func (r *Renewer) RenewCertificates(ctx context.Context, _ *types.Cluster, config *RenewalConfig, component string) error {
+	if err := validateComponent(component); err != nil {
+		return err
+	}
+
+	if err := r.prepareRenewal(ctx); err != nil {
+		return err
+	}
+
+	if err := r.processEtcdRenewal(ctx, config, component); err != nil {
+		return err
+	}
+
+	if err := r.processControlPlaneRenewal(ctx, config, component); err != nil {
+		return err
+	}
+
+	return r.finishRenewal()
 }
 
 func (r *Renewer) initKubeClient() error {
@@ -139,7 +188,7 @@ func (r *Renewer) initKubeClient() error {
 	return nil
 }
 
-func (r *Renewer) checkAPIServerReachability(ctx context.Context) error {
+func (r *Renewer) checkAPIServerReachability(_ context.Context) error {
 	for i := 0; i < 5; i++ {
 		_, err := r.kubeClient.Discovery().ServerVersion()
 		if err == nil {
@@ -157,7 +206,7 @@ func (r *Renewer) backupKubeadmConfig(ctx context.Context) error {
 	}
 
 	backupPath := filepath.Join(r.backupDir, "kubeadm-config.yaml")
-	if err := os.WriteFile(backupPath, []byte(cm.Data["ClusterConfiguration"]), 0600); err != nil {
+	if err := os.WriteFile(backupPath, []byte(cm.Data["ClusterConfiguration"]), 0o600); err != nil {
 		return fmt.Errorf("writing kubeadm config backup: %v", err)
 	}
 
@@ -165,7 +214,6 @@ func (r *Renewer) backupKubeadmConfig(ctx context.Context) error {
 }
 
 func (r *Renewer) renewEtcdCerts(ctx context.Context, config *RenewalConfig) error {
-
 	if err := r.initSSHConfig(config.Etcd.SSHUser, config.Etcd.SSHKey, config.Etcd.SSHPasswd); err != nil {
 		return fmt.Errorf("initializing SSH config: %v", err)
 	}

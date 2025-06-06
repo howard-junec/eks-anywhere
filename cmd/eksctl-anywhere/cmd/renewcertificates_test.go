@@ -81,7 +81,7 @@ controlPlane:
 	}
 }
 
-func validateRenewCertificatesOptions(cmd *cobra.Command, rc *renewCertificatesOptions) error {
+func validateRenewCertificatesOptions(_ *cobra.Command, rc *renewCertificatesOptions) error {
 	if rc.configFile == "" {
 		return os.ErrNotExist
 	}
