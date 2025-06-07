@@ -16,7 +16,7 @@ type NodeConfig struct {
 	OS        string   `yaml:"os"`
 	SSHKey    string   `yaml:"sshKey"`
 	SSHUser   string   `yaml:"sshUser"`
-	SSHPasswd string   `yaml:"sshPasswd,omitempty"` // Optional SSH key passphrase
+	SSHPasswd string   `yaml:"sshPasswd,omitempty"` // Optional SSH key passphrase.
 }
 
 // RenewalConfig defines the configuration for certificate renewal operations.
@@ -58,7 +58,7 @@ func validateConfig(config *RenewalConfig) error {
 		return fmt.Errorf("validating control plane: %v", err)
 	}
 
-	// Etcd nodes are optional (could be embedded in control plane)
+	// Etcd nodes are optional (could be embedded in control plane).
 	if len(config.Etcd.Nodes) > 0 {
 		if err := validateNodeConfig(&config.Etcd); err != nil {
 			return fmt.Errorf("validating etcd: %v", err)

@@ -236,7 +236,7 @@ func (r *Renewer) renewControlPlaneCerts(ctx context.Context, config *RenewalCon
 		return fmt.Errorf("initializing SSH config: %v", err)
 	}
 
-	// Renew certificate for each control plane node
+	// Renew certificate for each control plane node.
 	for _, node := range config.ControlPlane.Nodes {
 		if err := r.renewControlPlaneNodeCerts(ctx, node, config, component); err != nil {
 			return fmt.Errorf("renewing certificates for control plane node %s: %v", node, err)
@@ -247,7 +247,7 @@ func (r *Renewer) renewControlPlaneCerts(ctx context.Context, config *RenewalCon
 }
 
 func (r *Renewer) initSSHConfig(user, keyPath string, passwd string) error {
-	r.sshKeyPath = keyPath // Store SSH key path
+	r.sshKeyPath = keyPath // Store SSH key path.
 	key, err := os.ReadFile(keyPath)
 	if err != nil {
 		return fmt.Errorf("reading SSH key: %v", err)
@@ -319,7 +319,7 @@ func (r *Renewer) runCommand(ctx context.Context, client sshClient, cmd string) 
 			return
 		}
 		defer session.Close()
-		// print shell session progress
+		// print shell session progress.
 		session.Stdout = os.Stdout
 		session.Stderr = os.Stderr
 
