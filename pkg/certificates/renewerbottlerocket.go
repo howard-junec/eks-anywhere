@@ -393,6 +393,10 @@ EOF`, bottlerocketTmpDir)
 func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterName string) error {
 	fmt.Printf("Updating %s-apiserver-etcd-client secret...\n", clusterName)
 
+	if err := r.ensureNamespaceExists(ctx, "eksa-system"); err != nil {
+		return fmt.Errorf("ensuring eksa-system namespace exists: %v", err)
+	}
+
 	crtPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
 	keyPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
 
@@ -447,6 +451,28 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 	}
 
 	fmt.Printf("✅ Successfully updated %s secret.\n", secretName)
+	return nil
+}
+
+// For workload cluster, if there is no eksa-system name space, create it.
+func (r *Renewer) ensureNamespaceExists(ctx context.Context, namespace string) error {
+	_, err := r.kubeClient.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			_, err = r.kubeClient.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("failed to create namespace %s: %v", namespace, err)
+			}
+			fmt.Printf("Created namespace %s\n", namespace)
+		} else {
+			return fmt.Errorf("failed to check namespace %s: %v", namespace, err)
+		}
+	}
 	return nil
 }
 
