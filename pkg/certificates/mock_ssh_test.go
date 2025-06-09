@@ -49,10 +49,10 @@ func (mr *MockClientRecorder) NewSession() *gomock.Call {
 	return mr.mock.ctrl.RecordCall(mr.mock, "NewSession")
 }
 
-func (m *MockClient) Dial(n, addr string) (net.Conn, error)              { return nil, nil }
-func (m *MockClient) Listen(n, addr string) (net.Listener, error)        { return nil, nil }
-func (m *MockClient) ListenTCP(laddr *net.TCPAddr) (net.Listener, error) { return nil, nil }
-func (m *MockClient) ListenUnix(addr string) (net.Listener, error)       { return nil, nil }
+func (m *MockClient) Dial(_, _ string) (net.Conn, error)             { return nil, nil }
+func (m *MockClient) Listen(_, _ string) (net.Listener, error)       { return nil, nil }
+func (m *MockClient) ListenTCP(_ *net.TCPAddr) (net.Listener, error) { return nil, nil }
+func (m *MockClient) ListenUnix(_ string) (net.Listener, error)      { return nil, nil }
 
 type MockSession struct {
 	ctrl     *gomock.Controller
@@ -104,17 +104,17 @@ func (mr *MockSessionRecorder) Output(cmd interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCall(mr.mock, "Output", cmd)
 }
 
-func (m *MockSession) RequestPty(term string, h, w uint, modes ssh.TerminalModes) error {
+func (m *MockSession) RequestPty(_ string, _, _ uint, _ ssh.TerminalModes) error {
 	return nil
 }
 func (m *MockSession) Shell() error                       { return nil }
-func (m *MockSession) Signal(sig ssh.Signal) error        { return nil }
-func (m *MockSession) Start(cmd string) error             { return nil }
+func (m *MockSession) Signal(_ ssh.Signal) error          { return nil }
+func (m *MockSession) Start(_ string) error               { return nil }
 func (m *MockSession) StderrPipe() (io.Reader, error)     { return nil, nil }
 func (m *MockSession) StdinPipe() (io.WriteCloser, error) { return nil, nil }
 func (m *MockSession) StdoutPipe() (io.Reader, error)     { return nil, nil }
 func (m *MockSession) Wait() error                        { return nil }
-func (m *MockSession) SendRequest(name string, wantReply bool, payload []byte) (bool, error) {
+func (m *MockSession) SendRequest(_ string, _ bool, _ []byte) (bool, error) {
 	return false, nil
 }
 func (m *MockSession) Stderr() io.Writer { return nil }

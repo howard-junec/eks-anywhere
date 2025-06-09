@@ -5,16 +5,71 @@ import (
 	"testing"
 )
 
-func TestInitSSHConfig(t *testing.T) {
-	tests := []struct {
-		name        string
-		user        string
-		keyPath     string
-		passwd      string
-		keyContent  string
-		expectError bool
-		errorMsg    string
-	}{
+// sshConfigTestCase defines a test case for initSSHConfig.
+type sshConfigTestCase struct {
+	name        string
+	user        string
+	keyPath     string
+	passwd      string
+	keyContent  string
+	expectError bool
+	errorMsg    string
+}
+
+// setupSSHKeyFile creates a temporary SSH key file with the given content.
+func setupSSHKeyFile(t *testing.T, path, content string) func() {
+	if content == "" {
+		return func() {}
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return func() { os.Remove(path) }
+}
+
+// verifySSHConfig verifies that the SSH config was set correctly.
+func verifySSHConfig(t *testing.T, r *Renewer, tt sshConfigTestCase) {
+	if !tt.expectError {
+		if r.sshConfig == nil {
+			t.Error("SSH config was not set")
+		}
+		if r.sshConfig.User != tt.user {
+			t.Errorf("expected SSH user %q, got %q", tt.user, r.sshConfig.User)
+		}
+		if r.sshKeyPath != tt.keyPath {
+			t.Errorf("expected SSH key path %q, got %q", tt.keyPath, r.sshKeyPath)
+		}
+	}
+}
+
+// runSSHConfigTest runs a single initSSHConfig test case.
+func runSSHConfigTest(t *testing.T, tt sshConfigTestCase) {
+	cleanup := setupSSHKeyFile(t, tt.keyPath, tt.keyContent)
+	defer cleanup()
+
+	r, err := NewRenewer()
+	if err != nil {
+		t.Fatalf("failed to create renewer: %v", err)
+	}
+
+	err = r.initSSHConfig(tt.user, tt.keyPath, tt.passwd)
+	if tt.expectError && err == nil {
+		t.Error("expected error but got none")
+	}
+	if !tt.expectError && err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if tt.expectError && err != nil && tt.errorMsg != "" && !contains(err.Error(), tt.errorMsg) {
+		t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
+	}
+
+	verifySSHConfig(t, r, tt)
+}
+
+// getSSHConfigTestCases returns test cases for initSSHConfig.
+func getSSHConfigTestCases() []sshConfigTestCase {
+	return []sshConfigTestCase{
 		{
 			name:        "valid SSH key without passphrase",
 			user:        "ec2-user",
@@ -30,7 +85,7 @@ func TestInitSSHConfig(t *testing.T) {
 			passwd:      "",
 			keyContent:  "invalid-key",
 			expectError: true,
-			errorMsg:    "failed to parse SSH key",
+			errorMsg:    "parsing SSH key",
 		},
 		{
 			name:        "non-existent SSH key file",
@@ -39,46 +94,17 @@ func TestInitSSHConfig(t *testing.T) {
 			passwd:      "",
 			keyContent:  "",
 			expectError: true,
-			errorMsg:    "failed to read SSH key",
+			errorMsg:    "reading SSH key",
 		},
 	}
+}
 
+// TestInitSSHConfig tests the initSSHConfig function.
+func TestInitSSHConfig(t *testing.T) {
+	tests := getSSHConfigTestCases()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.keyContent != "" {
-				if err := os.WriteFile(tt.keyPath, []byte(tt.keyContent), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				defer os.Remove(tt.keyPath)
-			}
-
-			r, err := NewRenewer()
-			if err != nil {
-				t.Fatalf("failed to create renewer: %v", err)
-			}
-
-			err = r.initSSHConfig(tt.user, tt.keyPath, tt.passwd)
-			if tt.expectError && err == nil {
-				t.Error("expected error but got none")
-			}
-			if !tt.expectError && err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
-			if tt.expectError && err != nil && tt.errorMsg != "" && !contains(err.Error(), tt.errorMsg) {
-				t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
-			}
-
-			if !tt.expectError {
-				if r.sshConfig == nil {
-					t.Error("SSH config was not set")
-				}
-				if r.sshConfig.User != tt.user {
-					t.Errorf("expected SSH user %q, got %q", tt.user, r.sshConfig.User)
-				}
-				if r.sshKeyPath != tt.keyPath {
-					t.Errorf("expected SSH key path %q, got %q", tt.keyPath, r.sshKeyPath)
-				}
-			}
+			runSSHConfigTest(t, tt)
 		})
 	}
 }

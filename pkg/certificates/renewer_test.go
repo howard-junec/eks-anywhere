@@ -20,16 +20,81 @@ var testCommands = []string{
 	"kubeadm certs check-expiration",
 }
 
-func TestRenewCertificates(t *testing.T) {
-	tests := []struct {
-		name           string
-		config         *RenewalConfig
-		component      string
-		expectError    bool
-		sshErr         error
-		expectCommands []string
-		setup          func(*testing.T, *gomock.Controller) (*Renewer, func())
-	}{
+// renewCertificatesTestCase defines a test case for RenewCertificates.
+type renewCertificatesTestCase struct {
+	name           string
+	config         *RenewalConfig
+	component      string
+	expectError    bool
+	sshErr         error
+	expectCommands []string
+	setup          func(*testing.T, *gomock.Controller) (*Renewer, func())
+}
+
+// setupBasicRenewer creates a basic renewer with the given client.
+func setupBasicRenewer(t *testing.T, client *fake.Clientset) *Renewer {
+	r, err := NewRenewer()
+	if err != nil {
+		t.Fatalf("failed to create renewer: %v", err)
+	}
+	r.kubeClient = client
+	return r
+}
+
+// setupMockSSHClient sets up a mock SSH client for the renewer.
+func setupMockSSHClient(r *Renewer, mockClient *MockClient) {
+	// Set up SSH dialer to return our mock client
+	r.sshDialer = func(_, _ string, _ *ssh.ClientConfig) (sshClient, error) {
+		return mockClient, nil
+	}
+
+	// Skip SSH key initialization by directly setting the SSH config
+	r.sshConfig = &ssh.ClientConfig{
+		User: "ec2-user",
+		Auth: []ssh.AuthMethod{
+			ssh.Password("test-password"),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+}
+
+// createConfigMap creates a kubeadm config map.
+func createConfigMap() *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kubeadm-config",
+			Namespace: "kube-system",
+		},
+		Data: map[string]string{
+			"ClusterConfiguration": "test-config",
+		},
+	}
+}
+
+// runRenewCertificatesTest runs a single RenewCertificates test case.
+func runRenewCertificatesTest(t *testing.T, tt renewCertificatesTestCase) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	r, cleanup := tt.setup(t, ctrl)
+	defer cleanup()
+
+	cluster := &types.Cluster{
+		Name: tt.config.ClusterName,
+	}
+
+	err := r.RenewCertificates(context.Background(), cluster, tt.config, tt.component)
+	if tt.expectError && err == nil {
+		t.Error("expected error but got none")
+	}
+	if !tt.expectError && err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// getRenewCertificatesTestCases returns test cases for RenewCertificates.
+func getRenewCertificatesTestCases() []renewCertificatesTestCase {
+	return []renewCertificatesTestCase{
 		{
 			name: "invalid component",
 			config: &RenewalConfig{
@@ -43,12 +108,8 @@ func TestRenewCertificates(t *testing.T) {
 			},
 			component:   "invalid",
 			expectError: true,
-			setup: func(t *testing.T, ctrl *gomock.Controller) (*Renewer, func()) {
-				r, err := NewRenewer()
-				if err != nil {
-					t.Fatalf("failed to create renewer: %v", err)
-				}
-				r.kubeClient = fake.NewSimpleClientset()
+			setup: func(t *testing.T, _ *gomock.Controller) (*Renewer, func()) {
+				r := setupBasicRenewer(t, fake.NewSimpleClientset())
 				return r, func() {}
 			},
 		},
@@ -70,46 +131,18 @@ func TestRenewCertificates(t *testing.T) {
 				},
 			},
 			component:      "control-plane",
-			expectError:    true, // Change to true since we expect an error in the test
+			expectError:    true,
 			expectCommands: testCommands,
 			setup: func(t *testing.T, ctrl *gomock.Controller) (*Renewer, func()) {
-				r, err := NewRenewer()
-				if err != nil {
-					t.Fatalf("failed to create renewer: %v", err)
-				}
-				cm := &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "kubeadm-config",
-						Namespace: "kube-system",
-					},
-					Data: map[string]string{
-						"ClusterConfiguration": "test-config",
-					},
-				}
-				r.kubeClient = fake.NewSimpleClientset(cm)
+				cm := createConfigMap()
+				r := setupBasicRenewer(t, fake.NewSimpleClientset(cm))
 
 				// Mock SSH client
 				mockClient := NewMockClient(ctrl)
-
-				// We need to use ssh.Session instead of MockSession directly
-				// because the NewSession() method returns *ssh.Session
 				mockClient.EXPECT().NewSession().Return(nil, nil).AnyTimes()
 				mockClient.EXPECT().Close().Return(nil).AnyTimes()
 
-				// Set up SSH dialer to return our mock client
-				r.sshDialer = func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
-					return mockClient, nil
-				}
-
-				// Skip SSH key initialization by directly setting the SSH config
-				r.sshConfig = &ssh.ClientConfig{
-					User: "ec2-user",
-					Auth: []ssh.AuthMethod{
-						ssh.Password("test-password"),
-					},
-					HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-				}
-
+				setupMockSSHClient(r, mockClient)
 				return r, func() {}
 			},
 		},
@@ -128,31 +161,14 @@ func TestRenewCertificates(t *testing.T) {
 			expectError: true,
 			sshErr:      errors.New("ssh connection failed"),
 			setup: func(t *testing.T, ctrl *gomock.Controller) (*Renewer, func()) {
-				r, err := NewRenewer()
-				if err != nil {
-					t.Fatalf("failed to create renewer: %v", err)
-				}
-				r.kubeClient = fake.NewSimpleClientset()
+				r := setupBasicRenewer(t, fake.NewSimpleClientset())
 
 				// Mock SSH client with error
 				mockClient := NewMockClient(ctrl)
 				mockClient.EXPECT().NewSession().Return(nil, errors.New("ssh connection failed")).AnyTimes()
 				mockClient.EXPECT().Close().Return(nil).AnyTimes()
 
-				// Set up SSH dialer to return our mock client
-				r.sshDialer = func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
-					return mockClient, nil
-				}
-
-				// Skip SSH key initialization by directly setting the SSH config
-				r.sshConfig = &ssh.ClientConfig{
-					User: "ec2-user",
-					Auth: []ssh.AuthMethod{
-						ssh.Password("test-password"),
-					},
-					HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-				}
-
+				setupMockSSHClient(r, mockClient)
 				return r, func() {}
 			},
 		},
@@ -168,41 +184,17 @@ func TestRenewCertificates(t *testing.T) {
 				},
 			},
 			component:   "control-plane",
-			expectError: true, // We expect an error in the test due to SSH key
+			expectError: true,
 			setup: func(t *testing.T, ctrl *gomock.Controller) (*Renewer, func()) {
-				r, err := NewRenewer()
-				if err != nil {
-					t.Fatalf("failed to create renewer: %v", err)
-				}
-				r.kubeClient = fake.NewSimpleClientset(&corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "kubeadm-config",
-						Namespace: "kube-system",
-					},
-					Data: map[string]string{
-						"ClusterConfiguration": "test-config",
-					},
-				})
+				cm := createConfigMap()
+				r := setupBasicRenewer(t, fake.NewSimpleClientset(cm))
 
 				// Mock SSH client
 				mockClient := NewMockClient(ctrl)
 				mockClient.EXPECT().NewSession().Return(nil, nil).AnyTimes()
 				mockClient.EXPECT().Close().Return(nil).AnyTimes()
 
-				// Set up SSH dialer to return our mock client
-				r.sshDialer = func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
-					return mockClient, nil
-				}
-
-				// Skip SSH key initialization by directly setting the SSH config
-				r.sshConfig = &ssh.ClientConfig{
-					User: "ec2-user",
-					Auth: []ssh.AuthMethod{
-						ssh.Password("test-password"),
-					},
-					HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-				}
-
+				setupMockSSHClient(r, mockClient)
 				return r, func() {}
 			},
 		},
@@ -218,65 +210,29 @@ func TestRenewCertificates(t *testing.T) {
 				},
 			},
 			component:   "control-plane",
-			expectError: true, // We expect an error in the test due to SSH key
+			expectError: true,
 			setup: func(t *testing.T, ctrl *gomock.Controller) (*Renewer, func()) {
-				r, err := NewRenewer()
-				if err != nil {
-					t.Fatalf("failed to create renewer: %v", err)
-				}
-				r.kubeClient = fake.NewSimpleClientset(&corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "kubeadm-config",
-						Namespace: "kube-system",
-					},
-					Data: map[string]string{
-						"ClusterConfiguration": "test-config",
-					},
-				})
+				cm := createConfigMap()
+				r := setupBasicRenewer(t, fake.NewSimpleClientset(cm))
 
 				// Mock SSH client
 				mockClient := NewMockClient(ctrl)
 				mockClient.EXPECT().NewSession().Return(nil, nil).AnyTimes()
 				mockClient.EXPECT().Close().Return(nil).AnyTimes()
 
-				// Set up SSH dialer to return our mock client
-				r.sshDialer = func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
-					return mockClient, nil
-				}
-
-				// Skip SSH key initialization by directly setting the SSH config
-				r.sshConfig = &ssh.ClientConfig{
-					User: "ec2-user",
-					Auth: []ssh.AuthMethod{
-						ssh.Password("test-password"),
-					},
-					HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-				}
-
+				setupMockSSHClient(r, mockClient)
 				return r, func() {}
 			},
 		},
 	}
+}
 
+// TestRenewCertificates tests the RenewCertificates function.
+func TestRenewCertificates(t *testing.T) {
+	tests := getRenewCertificatesTestCases()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-
-			r, cleanup := tt.setup(t, ctrl)
-			defer cleanup()
-
-			cluster := &types.Cluster{
-				Name: tt.config.ClusterName,
-			}
-
-			err := r.RenewCertificates(context.Background(), cluster, tt.config, tt.component)
-			if tt.expectError && err == nil {
-				t.Error("expected error but got none")
-			}
-			if !tt.expectError && err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
+			runRenewCertificatesTest(t, tt)
 		})
 	}
 }
