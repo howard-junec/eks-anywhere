@@ -2,8 +2,14 @@ package certificates
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
+
+// contains checks if a string contains another string.
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
+}
 
 // sshConfigTestCase defines a test case for initSSHConfig.
 type sshConfigTestCase struct {
@@ -109,7 +115,7 @@ func TestInitSSHConfig(t *testing.T) {
 	}
 }
 
-// Test private key for SSH tests
+// Test private key for SSH tests.
 // This is a test key, not used for anything real.
 var testPrivateKey = `-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
