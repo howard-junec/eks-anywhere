@@ -10,6 +10,25 @@ import (
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 )
 
+// Constants for certificate paths and components
+const (
+	tempLocalEtcdCertsDir = "etcd-client-certs"
+
+	// Ubuntu/RHEL paths
+	ubuntuEtcdCertDir           = "/etc/etcd"
+	ubuntuControlPlaneCertDir   = "/etc/kubernetes/pki"
+	ubuntuControlPlaneManifests = "/etc/kubernetes/manifests"
+
+	// Bottlerocket paths
+	bottlerocketEtcdCertDir         = "/var/lib/etcd"
+	bottlerocketControlPlaneCertDir = "/var/lib/kubeadm/pki"
+	bottlerocketTmpDir              = "/run/host-containerd/io.containerd.runtime.v2.task/default/admin/rootfs/tmp"
+
+	// Component types
+	componentEtcd         = "etcd"
+	componentControlPlane = "control-plane"
+)
+
 // NodeConfig holds SSH configuration for a node group.
 type NodeConfig struct {
 	Nodes     []string `yaml:"nodes"`

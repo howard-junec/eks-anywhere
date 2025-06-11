@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/eks-anywhere/pkg/certificates"
 	"github.com/aws/eks-anywhere/pkg/constants"
+	"github.com/aws/eks-anywhere/pkg/types"
 )
 
 type renewCertificatesOptions struct {
@@ -42,14 +43,38 @@ func validateComponent(component string) error {
 	return nil
 }
 
-func (rc *renewCertificatesOptions) renewCertificates(_ *cobra.Command, _ []string) error {
+func (rc *renewCertificatesOptions) renewCertificates(cmd *cobra.Command, _ []string) error {
 	if err := validateComponent(rc.component); err != nil {
 		return err
 	}
 
-	_, err := certificates.ParseConfig(rc.configFile)
+	config, err := certificates.ParseConfig(rc.configFile)
 	if err != nil {
-		return fmt.Errorf("parsing config file: %v", err)
+		return fmt.Errorf("failed to parse config file: %v", err)
 	}
-	return nil
+
+	cluster := &types.Cluster{
+		Name: config.ClusterName,
+	}
+
+	var osType string
+	if rc.component == constants.EtcdComponent && len(config.Etcd.Nodes) > 0 {
+		osType = config.Etcd.OS
+	} else if rc.component == constants.ControlPlaneComponent {
+		osType = config.ControlPlane.OS
+	} else {
+		osType = config.ControlPlane.OS
+		if len(config.Etcd.Nodes) > 0 && config.Etcd.OS != config.ControlPlane.OS {
+			return fmt.Errorf("etcd and control plane use different OS types (%s and %s), please specify --component",
+				config.Etcd.OS, config.ControlPlane.OS)
+		}
+	}
+
+	renewer, err := certificates.NewRenewer(osType)
+	if err != nil {
+		return fmt.Errorf("failed to create renewer: %v", err)
+	}
+
+	// pass empty string for component to renew both etcd and control plane certificates.
+	return renewer.RenewCertificates(cmd.Context(), cluster, config, rc.component)
 }
