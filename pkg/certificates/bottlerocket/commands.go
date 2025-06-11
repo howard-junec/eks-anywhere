@@ -1,7 +1,9 @@
 // Package bottlerocket provides utilities for managing certificates on Bottlerocket OS nodes.
 package bottlerocket
 
-import "fmt"
+import (
+	"fmt"
+)
 
 // ControlPlaneCommands contains shell commands for certificate operations on control plane nodes.
 type ControlPlaneCommands struct {
@@ -9,6 +11,7 @@ type ControlPlaneCommands struct {
 	BackupCerts   string
 	ImagePull     string
 	RenewCerts    string
+	CheckCerts    string
 	CopyCerts     string
 	RestartPods   string
 }
@@ -38,6 +41,7 @@ func (b *ControlPlaneCommandBuilder) BuildCommands() *ControlPlaneCommands {
 		BackupCerts:   b.buildBackupCerts(),
 		ImagePull:     b.buildImagePull(),
 		RenewCerts:    b.buildRenewCerts(),
+		CheckCerts:    b.buildCheckCerts(),
 		CopyCerts:     b.buildCopyCerts(),
 		RestartPods:   b.buildRestartPods(),
 	}
@@ -145,9 +149,18 @@ func (b *CertReadBuilder) BuildCommands() *CertReadCommands {
 
 func (b *ControlPlaneCommandBuilder) buildShelliePrefix() string {
 	return `set -euo pipefail
-sudo sheltie << 'EOF'
-set -x`
+sudo sheltie << 'EOF'`
 }
+
+// func (b *ControlPlaneCommandBuilder) buildShelliePrefix() string {
+// 	if logger.V(1).Enabled() {
+// 		return `set -euo pipefail
+// sudo sheltie << 'EOF'
+// set -x`
+// 	}
+// 	return `set -euo pipefail
+// sudo sheltie << 'EOF'`
+// }
 
 func (b *ControlPlaneCommandBuilder) buildBackupCerts() string {
 	if b.Component == "control-plane" && b.HasExternalEtcd {
@@ -172,9 +185,11 @@ func (b *ControlPlaneCommandBuilder) buildRenewCerts() string {
 --mount type=bind,src=/var/lib/kubeadm,dst=/var/lib/kubeadm,options=rbind:rw \
 --mount type=bind,src=/var/lib/kubeadm,dst=/etc/kubernetes,options=rbind:rw \
 --rm ${IMAGE_ID} tmp-cert-renew \
-/opt/bin/kubeadm certs renew all
+/opt/bin/kubeadm certs renew all`
+}
 
-ctr run \
+func (b *ControlPlaneCommandBuilder) buildCheckCerts() string {
+	return `ctr run \
 --mount type=bind,src=/var/lib/kubeadm,dst=/var/lib/kubeadm,options=rbind:rw \
 --mount type=bind,src=/var/lib/kubeadm,dst=/etc/kubernetes,options=rbind:rw \
 --rm ${IMAGE_ID} tmp-cert-check \
@@ -229,9 +244,18 @@ apiclient get | apiclient exec admin jq -r '.settings.kubernetes["static-pods"] 
 
 func (b *EtcdCommandBuilder) buildShelliePrefix() string {
 	return `set -euo pipefail
-sudo sheltie << 'EOF'
-set -x`
+sudo sheltie << 'EOF'`
 }
+
+// func (b *EtcdCommandBuilder) buildShelliePrefix() string {
+// 	if logger.V(1).Enabled() {
+// 		return `set -euo pipefail
+// sudo sheltie << 'EOF'
+// set -x`
+// 	}
+// 	return `set -euo pipefail
+// sudo sheltie << 'EOF'`
+// }
 
 func (b *EtcdCommandBuilder) buildImagePull() string {
 	return `IMAGE_ID=$(apiclient get | apiclient exec admin jq -r '.settings["host-containers"]["kubeadm-bootstrap"].source')
@@ -289,9 +313,16 @@ func (b *EtcdCommandBuilder) buildCleanup() string {
 }
 
 func (b *CertTransferBuilder) buildShelliePrefix() string {
-	return `sudo sheltie << 'EOF'
-set -x`
+	return `sudo sheltie << 'EOF'`
 }
+
+// func (b *CertTransferBuilder) buildShelliePrefix() string {
+// 	if logger.V(1).Enabled() {
+// 		return `sudo sheltie << 'EOF'
+// set -x`
+// 	}
+// 	return `sudo sheltie << 'EOF'`
+// }
 
 func (b *CertTransferBuilder) buildCreateDir() string {
 	return fmt.Sprintf(`echo "Creating directory..."

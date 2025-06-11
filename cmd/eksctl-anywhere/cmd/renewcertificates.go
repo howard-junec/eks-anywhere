@@ -1,13 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"log"
 
 	"github.com/spf13/cobra"
 
 	"github.com/aws/eks-anywhere/pkg/certificates"
 	"github.com/aws/eks-anywhere/pkg/constants"
+	"github.com/aws/eks-anywhere/pkg/logger"
 	"github.com/aws/eks-anywhere/pkg/types"
 )
 
@@ -31,20 +32,16 @@ func init() {
 	renewCmd.AddCommand(renewCertificatesCmd)
 	renewCertificatesCmd.Flags().StringVarP(&rc.configFile, "config", "f", "", "Config file containing node and SSH information")
 	renewCertificatesCmd.Flags().StringVarP(&rc.component, "component", "c", "", fmt.Sprintf("Component to renew certificates for (%s or %s). If not specified, renews both.", constants.EtcdComponent, constants.ControlPlaneComponent))
-	if err := renewCertificatesCmd.MarkFlagRequired("config"); err != nil {
-		log.Fatalf("marking config as required: %s", err)
-	}
-}
+	renewCertificatesCmd.Flags().IntVarP(&certificates.VerbosityLevel, "verbosity", "v", 0, "Set the verbosity level")
 
-func validateComponent(component string) error {
-	if component != "" && component != constants.EtcdComponent && component != constants.ControlPlaneComponent {
-		return fmt.Errorf("invalid component %q, must be either '%s' or '%s'", component, constants.EtcdComponent, constants.ControlPlaneComponent)
+	if err := renewCertificatesCmd.MarkFlagRequired("config"); err != nil {
+		// log.Fatalf("marking config as required: %s", err)
+		logger.Fatal(err, "marking config as required")
 	}
-	return nil
 }
 
 func (rc *renewCertificatesOptions) renewCertificates(cmd *cobra.Command, _ []string) error {
-	if err := validateComponent(rc.component); err != nil {
+	if err := certificates.ValidateComponent(rc.component); err != nil {
 		return err
 	}
 
@@ -53,28 +50,24 @@ func (rc *renewCertificatesOptions) renewCertificates(cmd *cobra.Command, _ []st
 		return fmt.Errorf("failed to parse config file: %v", err)
 	}
 
-	cluster := &types.Cluster{
-		Name: config.ClusterName,
+	if err := certificates.ValidateComponentWithConfig(rc.component, config); err != nil {
+		return err
 	}
 
-	var osType string
-	if rc.component == constants.EtcdComponent && len(config.Etcd.Nodes) > 0 {
-		osType = config.Etcd.OS
-	} else if rc.component == constants.ControlPlaneComponent {
-		osType = config.ControlPlane.OS
-	} else {
-		osType = config.ControlPlane.OS
-		if len(config.Etcd.Nodes) > 0 && config.Etcd.OS != config.ControlPlane.OS {
-			return fmt.Errorf("etcd and control plane use different OS types (%s and %s), please specify --component",
-				config.Etcd.OS, config.ControlPlane.OS)
-		}
-	}
+	osType := certificates.DetermineOSType(rc.component, config)
 
-	renewer, err := certificates.NewRenewer(osType)
+	renewer, err := certificates.NewRenewerWithClusterName(osType, config.ClusterName)
 	if err != nil {
 		return fmt.Errorf("failed to create renewer: %v", err)
 	}
 
-	// pass empty string for component to renew both etcd and control plane certificates.
-	return renewer.RenewCertificates(cmd.Context(), cluster, config, rc.component)
+	return rc.executeRenewal(cmd.Context(), config, osType, renewer)
+}
+
+func (rc *renewCertificatesOptions) executeRenewal(ctx context.Context, config *certificates.RenewalConfig, _ string, renewer *certificates.Renewer) error {
+	cluster := &types.Cluster{
+		Name: config.ClusterName,
+	}
+
+	return renewer.RenewCertificates(ctx, cluster, config, rc.component)
 }

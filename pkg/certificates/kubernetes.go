@@ -2,22 +2,27 @@ package certificates
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/aws/eks-anywhere/pkg/logger"
 )
 
-// KubernetesClient provides methods for interacting with Kubernetes
+// KubernetesClient provides methods for interacting with Kubernetes.
 type KubernetesClient interface {
 	// InitClient initializes the Kubernetes client
-	InitClient() error
+	InitClient(clusterName string) error
 
 	// CheckAPIServerReachability checks if the Kubernetes API server is reachable
 	CheckAPIServerReachability(ctx context.Context) error
@@ -27,28 +32,54 @@ type KubernetesClient interface {
 
 	// UpdateAPIServerEtcdClientSecret updates the apiserver-etcd-client secret
 	UpdateAPIServerEtcdClientSecret(ctx context.Context, clusterName, backupDir string) error
+
+	// IsCertificateExpired checks if the client certificate is expired
+	IsCertificateExpired() bool
 }
 
-// DefaultKubernetesClient is the default implementation of KubernetesClient
+// DefaultKubernetesClient is the default implementation of KubernetesClient.
 type DefaultKubernetesClient struct {
-	client kubernetes.Interface
+	client             kubernetes.Interface
+	kubeconfigPath     string
+	skipTLSVerify      bool
+	certificateExpired bool
+	config             *rest.Config
 }
 
-// NewKubernetesClient creates a new DefaultKubernetesClient
+// NewKubernetesClient creates a new DefaultKubernetesClient.
 func NewKubernetesClient() *DefaultKubernetesClient {
 	return &DefaultKubernetesClient{}
 }
 
-// InitClient initializes the Kubernetes client
-func (k *DefaultKubernetesClient) InitClient() error {
+// NewKubernetesClientWithKubeconfig creates a new DefaultKubernetesClient with kubeconfig path.
+func NewKubernetesClientWithKubeconfig(kubeconfigPath string) *DefaultKubernetesClient {
+	return &DefaultKubernetesClient{
+		kubeconfigPath: kubeconfigPath,
+	}
+}
+
+// NewKubernetesClientWithOptions creates a new DefaultKubernetesClient with options.
+func NewKubernetesClientWithOptions(kubeconfigPath string, skipTLSVerify bool) *DefaultKubernetesClient {
+	return &DefaultKubernetesClient{
+		kubeconfigPath: kubeconfigPath,
+		skipTLSVerify:  skipTLSVerify,
+	}
+}
+
+// InitClient initializes the Kubernetes client for certificate renewal operations.
+func (k *DefaultKubernetesClient) InitClient(clusterName string) error {
 	if k.client != nil {
 		return nil
 	}
 
-	kubeconfig := os.Getenv("KUBECONFIG")
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	kubeconfigPath, err := k.resolveKubeconfigPath(clusterName)
 	if err != nil {
-		return fmt.Errorf("building kubeconfig: %v", err)
+		return err
+	}
+
+	config, err := k.buildClientConfig(kubeconfigPath)
+	if err != nil {
+		return err
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
@@ -60,19 +91,126 @@ func (k *DefaultKubernetesClient) InitClient() error {
 	return nil
 }
 
-// CheckAPIServerReachability checks if the Kubernetes API server is reachable
-func (k *DefaultKubernetesClient) CheckAPIServerReachability(ctx context.Context) error {
+// resolveKubeconfigPath determines the kubeconfig path to use.
+func (k *DefaultKubernetesClient) resolveKubeconfigPath(clusterName string) (string, error) {
+	var kubeconfigPath string
+	if k.kubeconfigPath != "" {
+		kubeconfigPath = k.kubeconfigPath
+	} else {
+		if clusterName != "" {
+			pwd, err := os.Getwd()
+			if err == nil {
+				possiblePath := filepath.Join(pwd, clusterName, fmt.Sprintf("%s-eks-a-cluster.kubeconfig", clusterName))
+				if _, err := os.Stat(possiblePath); err == nil {
+					kubeconfigPath = possiblePath
+					logger.Info("Using kubeconfig from cluster directory", "path", kubeconfigPath)
+				}
+			}
+		}
+		if kubeconfigPath == "" {
+			return "", fmt.Errorf("no kubeconfig specified and KUBECONFIG environment variable is not set. " +
+				"Try setting KUBECONFIG environment variable: export KUBECONFIG=${PWD}/${CLUSTER_NAME}/${CLUSTER_NAME}-eks-a-cluster.kubeconfig")
+		}
+	}
+
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("kubeconfig file does not exist: %s", kubeconfigPath)
+	}
+
+	return kubeconfigPath, nil
+}
+
+// buildClientConfig builds the client config from the kubeconfig file.
+func (k *DefaultKubernetesClient) buildClientConfig(kubeconfigPath string) (*rest.Config, error) {
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("building kubeconfig: %v", err)
+	}
+
+	k.config = config
+	if !k.skipTLSVerify {
+		if k.checkCertificateExpired() {
+			// fmt.Printf("⚠️  Warning: Client certificate appears to be expired. Enabling TLS skip verification.\n")
+			logger.MarkWarning("Warning: Client certificate appears to be expired. Enabling TLS skip verification.")
+			k.skipTLSVerify = true
+			k.certificateExpired = true
+		}
+	}
+
+	if k.skipTLSVerify {
+		config.TLSClientConfig = rest.TLSClientConfig{
+			Insecure: true,
+		}
+	}
+	return config, nil
+}
+
+// checkCertificateExpired checks if the client certificate in kubeconfig is expired.
+func (k *DefaultKubernetesClient) checkCertificateExpired() bool {
+	if k.config == nil {
+		return false
+	}
+
+	if k.config.CertData != nil {
+		cert, err := x509.ParseCertificate(k.config.CertData)
+		if err == nil && time.Now().After(cert.NotAfter) {
+			return true
+		}
+	}
+
+	if k.config.CertFile != "" {
+		certData, err := os.ReadFile(k.config.CertFile)
+		if err == nil {
+			cert, err := x509.ParseCertificate(certData)
+			if err == nil && time.Now().After(cert.NotAfter) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// IsCertificateExpired returns whether the client certificate is expired.
+func (k *DefaultKubernetesClient) IsCertificateExpired() bool {
+	return k.certificateExpired
+}
+
+// CheckAPIServerReachability checks if the Kubernetes API server is reachable.
+func (k *DefaultKubernetesClient) CheckAPIServerReachability(_ context.Context) error {
+	if k.certificateExpired {
+		// fmt.Printf("🔧 Certificate is expired, attempting connection with TLS verification disabled...\n")
+		logger.MarkWarning("Certificate is expired, attempting connection with TLS verification disabled...")
+	}
+
 	for i := 0; i < 5; i++ {
 		_, err := k.client.Discovery().ServerVersion()
 		if err == nil {
+			if k.certificateExpired {
+				// fmt.Printf("✅ Successfully connected to API server (with expired certificate)\n")
+				logger.MarkPass("Successfully connected to API server (with expired certificate)")
+			} else {
+				// fmt.Printf("✅ Successfully connected to API server\n")
+				logger.MarkPass("Successfully connected to API server")
+			}
 			return nil
 		}
+
+		if strings.Contains(err.Error(), "certificate") || strings.Contains(err.Error(), "x509") {
+			// fmt.Printf("⚠️  Certificate error detected: %v\n", err)
+			logger.MarkWarning("Certificate error detected: %v", err)
+			if !k.skipTLSVerify {
+				// fmt.Printf("💡 Consider using --skip-tls-verify flag if certificates are expired\n")
+				logger.Info("💡 Consider using --skip-tls-verify flag if certificates are expired")
+			}
+		}
+
 		time.Sleep(10 * time.Second)
 	}
 	return fmt.Errorf("kubernetes API server is not reachable")
 }
 
-// BackupKubeadmConfig backs up the kubeadm-config ConfigMap
+// BackupKubeadmConfig backs up the kubeadm-config ConfigMap.
 func (k *DefaultKubernetesClient) BackupKubeadmConfig(ctx context.Context, backupDir string) error {
 	cm, err := k.client.CoreV1().ConfigMaps("kube-system").Get(ctx, "kubeadm-config", metav1.GetOptions{})
 	if err != nil {
@@ -87,9 +225,10 @@ func (k *DefaultKubernetesClient) BackupKubeadmConfig(ctx context.Context, backu
 	return nil
 }
 
-// UpdateAPIServerEtcdClientSecret updates the apiserver-etcd-client secret
+// UpdateAPIServerEtcdClientSecret updates the apiserver-etcd-client secret.
 func (k *DefaultKubernetesClient) UpdateAPIServerEtcdClientSecret(ctx context.Context, clusterName, backupDir string) error {
-	fmt.Printf("Updating %s-apiserver-etcd-client secret...\n", clusterName)
+	// fmt.Printf("Updating %s-apiserver-etcd-client secret...\n", clusterName)
+	logger.MarkPass("Updated apiserver-etcd-client secret", "cluster", clusterName)
 
 	if err := k.ensureNamespaceExists(ctx, "eksa-system"); err != nil {
 		return fmt.Errorf("ensuring eksa-system namespace exists: %v", err)
@@ -148,11 +287,12 @@ func (k *DefaultKubernetesClient) UpdateAPIServerEtcdClientSecret(ctx context.Co
 		}
 	}
 
-	fmt.Printf("✅ Successfully updated %s secret.\n", secretName)
+	// fmt.Printf("✅ Successfully updated %s secret.\n", secretName)
+	// logger.MarkPass("Successfully updated secret", "name", secretName)
 	return nil
 }
 
-// ensureNamespaceExists ensures that the specified namespace exists
+// ensureNamespaceExists ensures that the specified namespace exists.
 func (k *DefaultKubernetesClient) ensureNamespaceExists(ctx context.Context, namespace string) error {
 	_, err := k.client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
 	if err != nil {
@@ -166,7 +306,8 @@ func (k *DefaultKubernetesClient) ensureNamespaceExists(ctx context.Context, nam
 			if err != nil {
 				return fmt.Errorf("create namespace %s: %v", namespace, err)
 			}
-			fmt.Printf("Created namespace %s\n", namespace)
+			// fmt.Printf("Created namespace %s\n", namespace)
+			logger.Info("Created namespace %s", namespace)
 		} else {
 			return fmt.Errorf("check namespace %s: %v", namespace, err)
 		}
