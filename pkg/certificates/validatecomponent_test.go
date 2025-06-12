@@ -3,6 +3,8 @@ package certificates
 import (
 	"fmt"
 	"testing"
+
+	"github.com/aws/eks-anywhere/pkg/constants"
 )
 
 func TestValidateComponent(t *testing.T) {
@@ -47,8 +49,8 @@ func TestValidateComponent(t *testing.T) {
 }
 
 func validateComponentForTest(component string) error {
-	if component != "" && component != componentEtcd && component != componentControlPlane {
-		return fmt.Errorf("invalid component %q, must be either %q or %q", component, componentEtcd, componentControlPlane)
+	if component != "" && component != constants.EtcdComponent && component != constants.ControlPlaneComponent {
+		return fmt.Errorf("invalid component %q, must be either %q or %q", component, constants.EtcdComponent, constants.ControlPlaneComponent)
 	}
 	return nil
 }
