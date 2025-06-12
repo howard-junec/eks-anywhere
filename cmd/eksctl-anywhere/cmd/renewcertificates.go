@@ -35,7 +35,6 @@ func init() {
 	renewCertificatesCmd.Flags().IntVarP(&certificates.VerbosityLevel, "verbosity", "v", 0, "Set the verbosity level")
 
 	if err := renewCertificatesCmd.MarkFlagRequired("config"); err != nil {
-		// log.Fatalf("marking config as required: %s", err)
 		logger.Fatal(err, "marking config as required")
 	}
 }

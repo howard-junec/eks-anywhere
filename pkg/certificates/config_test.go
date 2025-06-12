@@ -41,9 +41,10 @@ func TestValidateConfig(t *testing.T) {
 			name: "valid config",
 			config: &RenewalConfig{
 				ClusterName: "test-cluster",
+				OS:          "ubuntu",
 				ControlPlane: NodeConfig{
-					Nodes:   []string{"192.168.1.10"},
-					OS:      "ubuntu",
+					Nodes: []string{"192.168.1.10"},
+					// OS:      "ubuntu",
 					SSHKey:  keyFile,
 					SSHUser: "ec2-user",
 				},
@@ -54,8 +55,8 @@ func TestValidateConfig(t *testing.T) {
 			name: "missing cluster name",
 			config: &RenewalConfig{
 				ControlPlane: NodeConfig{
-					Nodes:   []string{"192.168.1.10"},
-					OS:      "ubuntu",
+					Nodes: []string{"192.168.1.10"},
+					// OS:      "ubuntu",
 					SSHKey:  keyFile,
 					SSHUser: "ec2-user",
 				},
@@ -67,7 +68,7 @@ func TestValidateConfig(t *testing.T) {
 			config: &RenewalConfig{
 				ClusterName: "test-cluster",
 				ControlPlane: NodeConfig{
-					OS:      "ubuntu",
+					// OS:      "ubuntu",
 					SSHKey:  keyFile,
 					SSHUser: "ec2-user",
 				},
@@ -79,8 +80,8 @@ func TestValidateConfig(t *testing.T) {
 			config: &RenewalConfig{
 				ClusterName: "test-cluster",
 				ControlPlane: NodeConfig{
-					Nodes:   []string{"192.168.1.10"},
-					OS:      "ubuntu",
+					Nodes: []string{"192.168.1.10"},
+					// OS:      "ubuntu",
 					SSHKey:  "/tmp/non-existent-key",
 					SSHUser: "ec2-user",
 				},
@@ -92,8 +93,8 @@ func TestValidateConfig(t *testing.T) {
 			config: &RenewalConfig{
 				ClusterName: "test-cluster",
 				ControlPlane: NodeConfig{
-					Nodes:   []string{"192.168.1.10"},
-					OS:      "windows",
+					Nodes: []string{"192.168.1.10"},
+					// OS:      "windows",
 					SSHKey:  keyFile,
 					SSHUser: "ec2-user",
 				},

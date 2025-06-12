@@ -182,7 +182,7 @@ func (b *ControlPlaneCommandBuilder) buildCheckCerts() string {
 	return `ctr run \
 --mount type=bind,src=/var/lib/kubeadm,dst=/var/lib/kubeadm,options=rbind:rw \
 --mount type=bind,src=/var/lib/kubeadm,dst=/etc/kubernetes,options=rbind:rw \
---rm ${IMAGE_ID} tmp-cert-check \
+--rm ${IMAGE_ID} tmp-cert-renew \
 /opt/bin/kubeadm certs check-expiration`
 }
 

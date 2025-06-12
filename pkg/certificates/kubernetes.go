@@ -35,6 +35,8 @@ type KubernetesClient interface {
 
 	// IsCertificateExpired checks if the client certificate is expired
 	IsCertificateExpired() bool
+
+	InitClientWithKubeconfig(kubeconfigPath string) error
 }
 
 // DefaultKubernetesClient is the default implementation of KubernetesClient.
@@ -130,7 +132,6 @@ func (k *DefaultKubernetesClient) buildClientConfig(kubeconfigPath string) (*res
 	k.config = config
 	if !k.skipTLSVerify {
 		if k.checkCertificateExpired() {
-			// fmt.Printf("⚠️  Warning: Client certificate appears to be expired. Enabling TLS skip verification.\n")
 			logger.MarkWarning("Warning: Client certificate appears to be expired. Enabling TLS skip verification.")
 			k.skipTLSVerify = true
 			k.certificateExpired = true
@@ -179,7 +180,6 @@ func (k *DefaultKubernetesClient) IsCertificateExpired() bool {
 // CheckAPIServerReachability checks if the Kubernetes API server is reachable.
 func (k *DefaultKubernetesClient) CheckAPIServerReachability(_ context.Context) error {
 	if k.certificateExpired {
-		// fmt.Printf("🔧 Certificate is expired, attempting connection with TLS verification disabled...\n")
 		logger.MarkWarning("Certificate is expired, attempting connection with TLS verification disabled...")
 	}
 
@@ -187,20 +187,16 @@ func (k *DefaultKubernetesClient) CheckAPIServerReachability(_ context.Context) 
 		_, err := k.client.Discovery().ServerVersion()
 		if err == nil {
 			if k.certificateExpired {
-				// fmt.Printf("✅ Successfully connected to API server (with expired certificate)\n")
 				logger.MarkPass("Successfully connected to API server (with expired certificate)")
 			} else {
-				// fmt.Printf("✅ Successfully connected to API server\n")
 				logger.MarkPass("Successfully connected to API server")
 			}
 			return nil
 		}
 
 		if strings.Contains(err.Error(), "certificate") || strings.Contains(err.Error(), "x509") {
-			// fmt.Printf("⚠️  Certificate error detected: %v\n", err)
 			logger.MarkWarning("Certificate error detected: %v", err)
 			if !k.skipTLSVerify {
-				// fmt.Printf("💡 Consider using --skip-tls-verify flag if certificates are expired\n")
 				logger.Info("💡 Consider using --skip-tls-verify flag if certificates are expired")
 			}
 		}
@@ -227,7 +223,6 @@ func (k *DefaultKubernetesClient) BackupKubeadmConfig(ctx context.Context, backu
 
 // UpdateAPIServerEtcdClientSecret updates the apiserver-etcd-client secret.
 func (k *DefaultKubernetesClient) UpdateAPIServerEtcdClientSecret(ctx context.Context, clusterName, backupDir string) error {
-	// fmt.Printf("Updating %s-apiserver-etcd-client secret...\n", clusterName)
 	logger.MarkPass("Updated apiserver-etcd-client secret", "cluster", clusterName)
 
 	if err := k.ensureNamespaceExists(ctx, "eksa-system"); err != nil {
@@ -287,8 +282,7 @@ func (k *DefaultKubernetesClient) UpdateAPIServerEtcdClientSecret(ctx context.Co
 		}
 	}
 
-	// fmt.Printf("✅ Successfully updated %s secret.\n", secretName)
-	// logger.MarkPass("Successfully updated secret", "name", secretName)
+	logger.V(2).Info("Successfully updated secret", "name", secretName)
 	return nil
 }
 
@@ -306,11 +300,19 @@ func (k *DefaultKubernetesClient) ensureNamespaceExists(ctx context.Context, nam
 			if err != nil {
 				return fmt.Errorf("create namespace %s: %v", namespace, err)
 			}
-			// fmt.Printf("Created namespace %s\n", namespace)
 			logger.Info("Created namespace %s", namespace)
 		} else {
 			return fmt.Errorf("check namespace %s: %v", namespace, err)
 		}
 	}
 	return nil
+}
+
+// InitClientWithKubeconfig re-initializes the client with a user-supplied kubeconfig.
+func (k *DefaultKubernetesClient) InitClientWithKubeconfig(kubeconfigPath string) error {
+	k.kubeconfigPath = kubeconfigPath
+	k.client = nil
+	k.skipTLSVerify = false
+	k.certificateExpired = false
+	return k.InitClient("")
 }

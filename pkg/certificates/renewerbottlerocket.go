@@ -34,8 +34,6 @@ func NewBottlerocketRenewer(certPaths CertificatePaths) *BottlerocketRenewer {
 
 // RenewControlPlaneCerts renews control plane certificates on a Bottlerocket node.
 func (b *BottlerocketRenewer) RenewControlPlaneCerts(ctx context.Context, node string, config *RenewalConfig, component string, sshRunner SSHRunner, backupDir string) error {
-	// fmt.Printf("Processing control plane node: %s...\n", node)
-	// logger.Info("Processing control plane node", "node", node)
 	logger.V(2).Info("Processing control plane node", "node", node)
 
 	// for renew control panel only.
@@ -71,54 +69,15 @@ func (b *BottlerocketRenewer) RenewControlPlaneCerts(ctx context.Context, node s
 		return fmt.Errorf("renew control panel node certificates: %v", err)
 	}
 
-	// logger level for check bottlerocket renew details
-	// if VerbosityLevel >= 1 {
-	// 	checkSession := fmt.Sprintf("%s\n%s\nEOF", commands.ShelliePrefix, commands.CheckCerts)
-	// 	output, err := sshRunner.RunCommandWithOutput(ctx, node, checkSession)
-	// 	if err != nil {
-	// 		logger.Info("Certificate check failed (expected for Bottlerocket, can be ignored)", "node", node, "error", err)
-	// 		if output != "" {
-	// 			logger.Info("Certificate check partial output", "node", node, "output", output)
-	// 		}
-	// 	} else {
-	// 		logger.Info("Certificate check results", "node", node, "output", output)
-	// 	}
-	// }
 	if VerbosityLevel >= 1 {
-		checkSession := fmt.Sprintf("%s\n%s\nEOF", commands.ShelliePrefix, commands.CheckCerts)
-		output, err := sshRunner.RunCommandWithOutput(ctx, node, checkSession)
-		if err != nil {
-			logger.Info(fmt.Sprintf("Certificate check failed: %v", err), "node", node)
-			if output != "" {
-				logger.Info("Certificate check partial output:", "node", node)
-				lines := strings.Split(output, "\n")
-				for _, line := range lines {
-					if line != "" {
-						logger.Info("  " + line)
-					}
-				}
-			}
-		} else {
-			logger.Info("Certificate check results:", "node", node)
-			lines := strings.Split(output, "\n")
-			for _, line := range lines {
-				if line != "" {
-					logger.Info("  " + line)
-				}
-			}
-		}
+		b.checkCertificates(ctx, node, sshRunner, commands)
 	}
 
-	// fmt.Printf("✅ Completed renewing certificate for the control node: %s.\n", node)
-	// fmt.Printf("---------------------------------------------\n")
 	logger.MarkPass("Renewed certificates for control plane node", "node", node)
-	// logger.Info("---------------------------------------------")
 	return nil
 }
 
 func (b *BottlerocketRenewer) transferCertsToControlPlane(ctx context.Context, node string, sshRunner SSHRunner, backupDir string) error {
-	// fmt.Printf("Transferring certificates to control plane node: %s...\n", node)
-	// logger.Info("Transferring certificates to control plane node", "node", node)
 	logger.V(2).Info("Transferring certificates to control plane node", "node", node)
 
 	srcCrt := filepath.Join(backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
@@ -149,16 +108,12 @@ func (b *BottlerocketRenewer) transferCertsToControlPlane(ctx context.Context, n
 		return fmt.Errorf("transfer certificates: %v", err)
 	}
 
-	// fmt.Printf("External certificates transferred to control plane node: %s.\n", node)
-	// logger.Info("External certificates transferred to control plane node", "node", node)
 	logger.V(2).Info("External certificates transferred to control plane node", "node", node)
 	return nil
 }
 
 // RenewEtcdCerts renews etcd certificates on a Bottlerocket node.
 func (b *BottlerocketRenewer) RenewEtcdCerts(ctx context.Context, node string, sshRunner SSHRunner, backupDir string) error {
-	// fmt.Printf("Processing etcd node: %s...\n", node)
-	// logger.Info("Processing etcd node", "node", node)
 	logger.V(2).Info("Processing etcd node", "node", node)
 
 	builder := bottlerocket.NewEtcdCommandBuilder(backupDir, bottlerocketTmpDir)
@@ -185,8 +140,6 @@ func (b *BottlerocketRenewer) RenewEtcdCerts(ctx context.Context, node string, s
 	}
 
 	// copy certificates to local
-	// fmt.Printf("Copying certificates from node %s...\n", node)
-	// logger.Info("Copying certificates from node", "node", node)
 	logger.V(2).Info("Copying certificates from node", "node", node)
 
 	if err := b.copyEtcdCerts(ctx, node, sshRunner, backupDir); err != nil {
@@ -202,11 +155,7 @@ func (b *BottlerocketRenewer) RenewEtcdCerts(ctx context.Context, node string, s
 		return fmt.Errorf("cleanup temporary files: %v", err)
 	}
 
-	// fmt.Printf("✅ Completed renewing certificate for the ETCD node: %s.\n", node)
-	// fmt.Printf("---------------------------------------------\n")
-
 	logger.MarkPass("Renewed certificates for etcd node", "node", node)
-	// logger.Info("---------------------------------------------")
 
 	// save etcd cert for control panel renew
 	if err := b.saveCertsToPersistentStorage(backupDir); err != nil {
@@ -217,10 +166,7 @@ func (b *BottlerocketRenewer) RenewEtcdCerts(ctx context.Context, node string, s
 }
 
 func (b *BottlerocketRenewer) copyEtcdCerts(ctx context.Context, node string, sshRunner SSHRunner, backupDir string) error {
-	// fmt.Printf("Reading certificate from ETCD node %s...\n", node)
-	// fmt.Printf("Using backup directory: %s\n", backupDir)
-	// logger.Info("Reading certificate from ETCD node", "node", node)
-	// logger.Info("Using backup directory", "path", backupDir)
+
 	logger.V(2).Info("Reading certificate from ETCD node", "node", node)
 	logger.V(2).Info("Using backup directory", "path", backupDir)
 
@@ -240,8 +186,6 @@ func (b *BottlerocketRenewer) copyEtcdCerts(ctx context.Context, node string, ss
 		return fmt.Errorf("certificate file is empty")
 	}
 
-	// fmt.Printf("Reading key from ETCD node %s...\n", node)
-	// logger.Info("Reading key from ETCD node", "node", node)
 	logger.V(2).Info("Reading key from ETCD node", "node", node)
 
 	keyContent, err := sshRunner.RunCommandWithOutput(ctx, node, commands.ReadKey)
@@ -256,12 +200,6 @@ func (b *BottlerocketRenewer) copyEtcdCerts(ctx context.Context, node string, ss
 	crtPath := filepath.Join(backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
 	keyPath := filepath.Join(backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
 
-	// fmt.Printf("Writing certificates to:\n")
-	// fmt.Printf("Certificate: %s\n", crtPath)
-	// fmt.Printf("Key: %s\n", keyPath)
-	// logger.Info("Writing certificates to:")
-	// logger.Info("Certificate", "path", crtPath)
-	// logger.Info("Key", "path", keyPath)
 	logger.V(2).Info("Writing certificates to:")
 	logger.V(2).Info("Certificate", "path", crtPath)
 	logger.V(2).Info("Key", "path", keyPath)
@@ -272,15 +210,7 @@ func (b *BottlerocketRenewer) copyEtcdCerts(ctx context.Context, node string, ss
 	if err := os.WriteFile(keyPath, []byte(keyContent), 0o600); err != nil {
 		return fmt.Errorf("write key file: %v", err)
 	}
-	// fmt.Printf("✅ Certificates copied successfully:\n")
-	// fmt.Printf("Backup directory: %s\n", backupDir)
-	// fmt.Printf("Certificate path: %s\n", crtPath)
-	// fmt.Printf("Key path: %s\n", keyPath)
 
-	// logger.MarkPass("Certificates copied successfully:")
-	// logger.Info("Backup directory", "path", backupDir)
-	// logger.Info("Certificate path", "path", crtPath)
-	// logger.Info("Key path", "path", keyPath)
 	logger.V(2).Info("Certificates copied successfully")
 	logger.V(2).Info("Backup directory", "path", backupDir)
 	logger.V(2).Info("Certificate path", "path", crtPath)
@@ -350,4 +280,29 @@ func copyFile(src, dest string) error {
 	}
 
 	return nil
+}
+
+func (b *BottlerocketRenewer) checkCertificates(ctx context.Context, node string, sshRunner SSHRunner, commands *bottlerocket.ControlPlaneCommands) {
+	checkSession := fmt.Sprintf("%s\n%s\n%s\nEOF", commands.ShelliePrefix, commands.ImagePull, commands.CheckCerts)
+	output, err := sshRunner.RunCommandWithOutput(ctx, node, checkSession)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Certificate check failed: %v", err), "node", node)
+		if output != "" {
+			logger.Info("Certificate check partial output:", "node", node)
+			lines := strings.Split(output, "\n")
+			for _, line := range lines {
+				if line != "" {
+					logger.Info("  " + line)
+				}
+			}
+		}
+	} else {
+		logger.Info("Certificate check results:", "node", node)
+		lines := strings.Split(output, "\n")
+		for _, line := range lines {
+			if line != "" {
+				logger.Info("  " + line)
+			}
+		}
+	}
 }

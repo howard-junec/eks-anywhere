@@ -322,12 +322,13 @@ func BuildConfigFromCluster(clusterName, sshKeyPath string) (*RenewalConfig, err
 	// Process control plane nodes
 	controlPlaneIPs, osType := processControlPlaneNodes(nodes)
 	renewalConfig.ControlPlane.Nodes = controlPlaneIPs
-	renewalConfig.ControlPlane.OS = osType
+	// renewalConfig.ControlPlane.OS = osType
+	renewalConfig.OS = osType
 
 	// Process etcd nodes if external etcd is configured
 	if len(clusterConfig.Etcd.External.Endpoints) > 0 {
 		renewalConfig.Etcd.Nodes = processEtcdEndpoints(clusterConfig.Etcd.External.Endpoints)
-		renewalConfig.Etcd.OS = osType // Assume same OS as control plane
+		// renewalConfig.Etcd.OS = osType // Assume same OS as control plane
 	}
 
 	// Get SSH configuration

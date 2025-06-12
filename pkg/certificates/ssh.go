@@ -33,6 +33,8 @@ type SSHRunner interface {
 
 	// InitSSHConfig initializes the SSH configuration
 	InitSSHConfig(user, keyPath, passwd string) error
+
+	DownloadFile(ctx context.Context, node, remote, local string) error
 }
 
 // DefaultSSHRunner is the default implementation of SSHRunner.
@@ -40,6 +42,7 @@ type DefaultSSHRunner struct {
 	sshConfig  *ssh.ClientConfig
 	sshDialer  sshDialer
 	sshKeyPath string
+	sshPasswd  string
 }
 
 // NewSSHRunner creates a new DefaultSSHRunner.
@@ -53,35 +56,19 @@ func NewSSHRunner() *DefaultSSHRunner {
 
 // InitSSHConfig initializes the SSH configuration.
 func (r *DefaultSSHRunner) InitSSHConfig(user, keyPath, passwd string) error {
+	if r.sshConfig != nil && r.sshKeyPath == keyPath {
+		return nil
+	}
+
 	r.sshKeyPath = keyPath // Store SSH key path.
 	key, err := os.ReadFile(keyPath)
 	if err != nil {
 		return fmt.Errorf("reading SSH key: %v", err)
 	}
 
-	var signer ssh.Signer
-	signer, err = ssh.ParsePrivateKey(key)
+	signer, err := r.parsePrivateKey(key, keyPath, passwd)
 	if err != nil {
-		if err.Error() == "ssh: this private key is passphrase protected" {
-			if passwd == "" {
-				// fmt.Printf("Enter passphrase for SSH key '%s': ", keyPath)
-				logger.Info("Enter passphrase for SSH key", "path", keyPath)
-				var passphrase []byte
-				passphrase, err = term.ReadPassword(int(os.Stdin.Fd()))
-				if err != nil {
-					return fmt.Errorf("reading passphrase: %v", err)
-				}
-				// fmt.Println()
-				logger.Info("")
-				passwd = string(passphrase)
-			}
-			signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(passwd))
-			if err != nil {
-				return fmt.Errorf("parsing SSH key with passphrase: %v", err)
-			}
-		} else {
-			return fmt.Errorf("parsing SSH key: %v", err)
-		}
+		return err
 	}
 
 	r.sshConfig = &ssh.ClientConfig{
@@ -94,6 +81,36 @@ func (r *DefaultSSHRunner) InitSSHConfig(user, keyPath, passwd string) error {
 	}
 
 	return nil
+}
+
+// parsePrivateKey parses an SSH private key, handling passphrase protection if needed.
+func (r *DefaultSSHRunner) parsePrivateKey(key []byte, keyPath, passwd string) (ssh.Signer, error) {
+	signer, err := ssh.ParsePrivateKey(key)
+	if err == nil {
+		return signer, nil
+	}
+
+	if err.Error() == "ssh: this private key is passphrase protected" {
+		if passwd == "" && r.sshPasswd == "" {
+			logger.Info("Enter passphrase for SSH key", "path", keyPath)
+			passphrase, err := term.ReadPassword(int(os.Stdin.Fd()))
+			if err != nil {
+				return nil, fmt.Errorf("reading passphrase: %v", err)
+			}
+			logger.Info("")
+			r.sshPasswd = string(passphrase)
+		} else if passwd != "" {
+			r.sshPasswd = passwd
+		}
+
+		signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(r.sshPasswd))
+		if err != nil {
+			return nil, fmt.Errorf("parsing SSH key with passphrase: %v", err)
+		}
+		return signer, nil
+	}
+
+	return nil, fmt.Errorf("parsing SSH key: %v", err)
 }
 
 // RunCommand runs a command on the remote host.
@@ -113,31 +130,7 @@ func (r *DefaultSSHRunner) RunCommand(ctx context.Context, node string, cmd stri
 		}
 		defer session.Close()
 
-		if VerbosityLevel >= 2 {
-			session.Stdout = os.Stdout
-			session.Stderr = os.Stderr
-			done <- session.Run(cmd)
-			return
-		}
-
-		var stdout, stderr bytes.Buffer
-		session.Stdout = &stdout
-		session.Stderr = &stderr
-
-		err = session.Run(cmd)
-
-		if strings.Contains(cmd, "kubeadm certs check-expiration") && VerbosityLevel >= 1 {
-			lines := strings.Split(stdout.String(), "\n")
-			logger.Info("Certificate check results", "node", node)
-			for _, line := range lines {
-				if line != "" {
-					logger.Info(line)
-				}
-			}
-		}
-
-		done <- err
-
+		done <- r.executeCommand(session, cmd, node)
 	}()
 
 	select {
@@ -149,6 +142,34 @@ func (r *DefaultSSHRunner) RunCommand(ctx context.Context, node string, cmd stri
 		}
 		return nil
 	}
+}
+
+// executeCommand executes a command on an SSH session and handles its output.
+func (r *DefaultSSHRunner) executeCommand(session *ssh.Session, cmd string, node string) error {
+	if VerbosityLevel >= 2 {
+		session.Stdout = os.Stdout
+		session.Stderr = os.Stderr
+		return session.Run(cmd)
+	}
+
+	var stdout, stderr bytes.Buffer
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+
+	err := session.Run(cmd)
+
+	// Special handling for certificate check commands
+	if strings.Contains(cmd, "kubeadm certs check-expiration") && VerbosityLevel >= 1 {
+		lines := strings.Split(stdout.String(), "\n")
+		logger.Info("Certificate check results", "node", node)
+		for _, line := range lines {
+			if line != "" {
+				logger.Info(line)
+			}
+		}
+	}
+
+	return err
 }
 
 // RunCommandWithOutput runs a command on the remote host and returns the output.
@@ -173,13 +194,6 @@ func (r *DefaultSSHRunner) RunCommandWithOutput(ctx context.Context, node string
 		}
 		defer session.Close()
 
-		// 	output, err := session.Output(cmd)
-		// 	if err != nil {
-		// 		done <- result{"", fmt.Errorf("executing command: %v", err)}
-		// 		return
-		// 	}
-		// 	done <- result{strings.TrimSpace(string(output)), nil}
-		// }()
 		outputBytes, err := session.CombinedOutput(cmd)
 		output := strings.TrimSpace(string(outputBytes))
 
@@ -201,4 +215,13 @@ func (r *DefaultSSHRunner) RunCommandWithOutput(ctx context.Context, node string
 	case res := <-done:
 		return res.output, res.err
 	}
+}
+
+// DownloadFile copies a remote file to the local host via an SSH cat pipe.
+func (r *DefaultSSHRunner) DownloadFile(ctx context.Context, node, remote, local string) error {
+	output, err := r.RunCommandWithOutput(ctx, node, fmt.Sprintf("sudo cat %s", remote))
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(local, []byte(output), 0o600)
 }
