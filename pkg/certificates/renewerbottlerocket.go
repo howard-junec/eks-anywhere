@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aws/eks-anywhere/pkg/certificates/bottlerocket"
 	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/logger"
 )
@@ -50,7 +49,7 @@ func (b *BottlerocketRenewer) RenewControlPlaneCerts(ctx context.Context, node s
 		}
 	}
 
-	builder := bottlerocket.NewControlPlaneCommandBuilder(
+	builder := NewControlPlaneCommandBuilder(
 		backupDir,
 		bottlerocketControlPlaneCertDir,
 		component,
@@ -95,7 +94,7 @@ func (b *BottlerocketRenewer) transferCertsToControlPlane(ctx context.Context, n
 	crtBase64 := base64.StdEncoding.EncodeToString(crtContent)
 	keyBase64 := base64.StdEncoding.EncodeToString(keyContent)
 
-	builder := bottlerocket.NewCertTransferBuilder(tempLocalEtcdCertsDir, crtBase64, keyBase64)
+	builder := NewCertTransferBuilder(tempLocalEtcdCertsDir, crtBase64, keyBase64)
 	commands := builder.BuildCommands()
 	session := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\nEOF",
 		commands.ShelliePrefix,
@@ -116,7 +115,7 @@ func (b *BottlerocketRenewer) transferCertsToControlPlane(ctx context.Context, n
 func (b *BottlerocketRenewer) RenewEtcdCerts(ctx context.Context, node string, sshRunner SSHRunner, backupDir string) error {
 	logger.V(2).Info("Processing etcd node", "node", node)
 
-	builder := bottlerocket.NewEtcdCommandBuilder(backupDir, bottlerocketTmpDir)
+	builder := NewEtcdCommandBuilder(backupDir, bottlerocketTmpDir)
 	commands := builder.BuildCommands()
 
 	// first session: backup and renew certificates
@@ -170,7 +169,7 @@ func (b *BottlerocketRenewer) copyEtcdCerts(ctx context.Context, node string, ss
 	logger.V(2).Info("Reading certificate from ETCD node", "node", node)
 	logger.V(2).Info("Using backup directory", "path", backupDir)
 
-	builder := bottlerocket.NewCertReadBuilder(bottlerocketTmpDir)
+	builder := NewCertReadBuilder(bottlerocketTmpDir)
 	commands := builder.BuildCommands()
 
 	if err := sshRunner.RunCommand(ctx, node, commands.ListFiles); err != nil {
@@ -282,7 +281,7 @@ func copyFile(src, dest string) error {
 	return nil
 }
 
-func (b *BottlerocketRenewer) checkCertificates(ctx context.Context, node string, sshRunner SSHRunner, commands *bottlerocket.ControlPlaneCommands) {
+func (b *BottlerocketRenewer) checkCertificates(ctx context.Context, node string, sshRunner SSHRunner, commands *ControlPlaneCommands) {
 	checkSession := fmt.Sprintf("%s\n%s\n%s\nEOF", commands.ShelliePrefix, commands.ImagePull, commands.CheckCerts)
 	output, err := sshRunner.RunCommandWithOutput(ctx, node, checkSession)
 	if err != nil {
