@@ -8,26 +8,25 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
+	"github.com/aws/eks-anywhere/pkg/constants"
 )
 
-// Constants for certificate paths and components
+// Constants for certificate paths and components.
 const (
 	tempLocalEtcdCertsDir = "etcd-client-certs"
 
-	// Ubuntu/RHEL paths
+	// Ubuntu/RHEL paths.
 	ubuntuEtcdCertDir           = "/etc/etcd"
 	ubuntuControlPlaneCertDir   = "/etc/kubernetes/pki"
 	ubuntuControlPlaneManifests = "/etc/kubernetes/manifests"
 
-	// Bottlerocket paths
+	// Bottlerocket paths.
 	bottlerocketEtcdCertDir         = "/var/lib/etcd"
 	bottlerocketControlPlaneCertDir = "/var/lib/kubeadm/pki"
 	bottlerocketTmpDir              = "/run/host-containerd/io.containerd.runtime.v2.task/default/admin/rootfs/tmp"
-
-	// Component types
-	componentEtcd         = "etcd"
-	componentControlPlane = "control-plane"
 )
+
+var VerbosityLevel int
 
 // NodeConfig holds SSH configuration for a node group.
 type NodeConfig struct {
@@ -82,6 +81,11 @@ func validateConfig(config *RenewalConfig) error {
 		if err := validateNodeConfig(&config.Etcd); err != nil {
 			return fmt.Errorf("validating etcd: %v", err)
 		}
+
+		if config.Etcd.OS != config.ControlPlane.OS {
+			return fmt.Errorf("etcd and control plane use different OS types (%s and %s), please specify component",
+				config.Etcd.OS, config.ControlPlane.OS)
+		}
 	}
 
 	return nil
@@ -109,4 +113,47 @@ func validateNodeConfig(config *NodeConfig) error {
 	}
 
 	return nil
+}
+
+// ValidateComponent checks if the specified component is valid.
+func ValidateComponent(component string) error {
+	if component != "" && component != constants.EtcdComponent && component != constants.ControlPlaneComponent {
+		return fmt.Errorf("invalid component %q, must be either %q or %q", component, constants.EtcdComponent, constants.ControlPlaneComponent)
+	}
+	return nil
+}
+
+// ValidateComponentWithConfig validates that the specified component is compatible with the configuration.
+func ValidateComponentWithConfig(component string, config *RenewalConfig) error {
+	if err := ValidateComponent(component); err != nil {
+		return err
+	}
+
+	if component == constants.EtcdComponent && len(config.Etcd.Nodes) == 0 {
+		return fmt.Errorf("no external etcd nodes defined; cannot use --component %s", constants.EtcdComponent)
+	}
+
+	if component == "" && len(config.Etcd.Nodes) > 0 && config.Etcd.OS != config.ControlPlane.OS {
+		return fmt.Errorf("etcd and control plane use different OS types (%s and %s), please specify component",
+			config.Etcd.OS, config.ControlPlane.OS)
+	}
+
+	return nil
+}
+
+// DetermineOSType determines the OS type to use based on the component.
+func DetermineOSType(component string, config *RenewalConfig) string {
+	switch component {
+	case constants.EtcdComponent:
+		return config.Etcd.OS
+	case constants.ControlPlaneComponent:
+		return config.ControlPlane.OS
+	default:
+		return config.ControlPlane.OS
+	}
+}
+
+// ShouldProcessComponent checks if the specified component should be processed.
+func ShouldProcessComponent(requestedComponent, targetComponent string) bool {
+	return requestedComponent == "" || requestedComponent == targetComponent
 }

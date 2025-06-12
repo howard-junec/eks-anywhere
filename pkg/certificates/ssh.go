@@ -1,6 +1,7 @@
 package certificates
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -9,18 +10,20 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
+
+	"github.com/aws/eks-anywhere/pkg/logger"
 )
 
-// sshClient interface defines the methods we need from ssh.Client
+// sshClient interface defines the methods we need from ssh.Client.
 type sshClient interface {
 	Close() error
 	NewSession() (*ssh.Session, error)
 }
 
-// sshDialer is a function type for dialing SSH connections
+// sshDialer is a function type for dialing SSH connections.
 type sshDialer func(network, addr string, config *ssh.ClientConfig) (sshClient, error)
 
-// SSHRunner provides methods for running commands over SSH
+// SSHRunner provides methods for running commands over SSH.
 type SSHRunner interface {
 	// RunCommand runs a command on the remote host
 	RunCommand(ctx context.Context, node string, cmd string) error
@@ -32,14 +35,14 @@ type SSHRunner interface {
 	InitSSHConfig(user, keyPath, passwd string) error
 }
 
-// DefaultSSHRunner is the default implementation of SSHRunner
+// DefaultSSHRunner is the default implementation of SSHRunner.
 type DefaultSSHRunner struct {
 	sshConfig  *ssh.ClientConfig
 	sshDialer  sshDialer
 	sshKeyPath string
 }
 
-// NewSSHRunner creates a new DefaultSSHRunner
+// NewSSHRunner creates a new DefaultSSHRunner.
 func NewSSHRunner() *DefaultSSHRunner {
 	return &DefaultSSHRunner{
 		sshDialer: func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
@@ -48,7 +51,7 @@ func NewSSHRunner() *DefaultSSHRunner {
 	}
 }
 
-// InitSSHConfig initializes the SSH configuration
+// InitSSHConfig initializes the SSH configuration.
 func (r *DefaultSSHRunner) InitSSHConfig(user, keyPath, passwd string) error {
 	r.sshKeyPath = keyPath // Store SSH key path.
 	key, err := os.ReadFile(keyPath)
@@ -61,13 +64,15 @@ func (r *DefaultSSHRunner) InitSSHConfig(user, keyPath, passwd string) error {
 	if err != nil {
 		if err.Error() == "ssh: this private key is passphrase protected" {
 			if passwd == "" {
-				fmt.Printf("Enter passphrase for SSH key '%s': ", keyPath)
+				// fmt.Printf("Enter passphrase for SSH key '%s': ", keyPath)
+				logger.Info("Enter passphrase for SSH key", "path", keyPath)
 				var passphrase []byte
 				passphrase, err = term.ReadPassword(int(os.Stdin.Fd()))
 				if err != nil {
 					return fmt.Errorf("reading passphrase: %v", err)
 				}
-				fmt.Println()
+				// fmt.Println()
+				logger.Info("")
 				passwd = string(passphrase)
 			}
 			signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(passwd))
@@ -91,7 +96,7 @@ func (r *DefaultSSHRunner) InitSSHConfig(user, keyPath, passwd string) error {
 	return nil
 }
 
-// RunCommand runs a command on the remote host
+// RunCommand runs a command on the remote host.
 func (r *DefaultSSHRunner) RunCommand(ctx context.Context, node string, cmd string) error {
 	client, err := r.sshDialer("tcp", fmt.Sprintf("%s:22", node), r.sshConfig)
 	if err != nil {
@@ -107,11 +112,32 @@ func (r *DefaultSSHRunner) RunCommand(ctx context.Context, node string, cmd stri
 			return
 		}
 		defer session.Close()
-		// print shell session progress.
-		session.Stdout = os.Stdout
-		session.Stderr = os.Stderr
 
-		done <- session.Run(cmd)
+		if VerbosityLevel >= 2 {
+			session.Stdout = os.Stdout
+			session.Stderr = os.Stderr
+			done <- session.Run(cmd)
+			return
+		}
+
+		var stdout, stderr bytes.Buffer
+		session.Stdout = &stdout
+		session.Stderr = &stderr
+
+		err = session.Run(cmd)
+
+		if strings.Contains(cmd, "kubeadm certs check-expiration") && VerbosityLevel >= 1 {
+			lines := strings.Split(stdout.String(), "\n")
+			logger.Info("Certificate check results", "node", node)
+			for _, line := range lines {
+				if line != "" {
+					logger.Info(line)
+				}
+			}
+		}
+
+		done <- err
+
 	}()
 
 	select {
@@ -125,7 +151,7 @@ func (r *DefaultSSHRunner) RunCommand(ctx context.Context, node string, cmd stri
 	}
 }
 
-// RunCommandWithOutput runs a command on the remote host and returns the output
+// RunCommandWithOutput runs a command on the remote host and returns the output.
 func (r *DefaultSSHRunner) RunCommandWithOutput(ctx context.Context, node string, cmd string) (string, error) {
 	client, err := r.sshDialer("tcp", fmt.Sprintf("%s:22", node), r.sshConfig)
 	if err != nil {
@@ -147,12 +173,26 @@ func (r *DefaultSSHRunner) RunCommandWithOutput(ctx context.Context, node string
 		}
 		defer session.Close()
 
-		output, err := session.Output(cmd)
+		// 	output, err := session.Output(cmd)
+		// 	if err != nil {
+		// 		done <- result{"", fmt.Errorf("executing command: %v", err)}
+		// 		return
+		// 	}
+		// 	done <- result{strings.TrimSpace(string(output)), nil}
+		// }()
+		outputBytes, err := session.CombinedOutput(cmd)
+		output := strings.TrimSpace(string(outputBytes))
+
 		if err != nil {
-			done <- result{"", fmt.Errorf("executing command: %v", err)}
+			if output != "" {
+				done <- result{output, fmt.Errorf("executing command: %v, output: %s", err, output)}
+			} else {
+				done <- result{"", fmt.Errorf("executing command: %v", err)}
+			}
 			return
 		}
-		done <- result{strings.TrimSpace(string(output)), nil}
+
+		done <- result{output, nil}
 	}()
 
 	select {

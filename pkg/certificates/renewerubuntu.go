@@ -3,113 +3,139 @@ package certificates
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/aws/eks-anywhere/pkg/logger"
 )
 
-// LinuxRenewer implements OSRenewer for Linux-based systems (Ubuntu/RHEL)
+// LinuxRenewer implements OSRenewer for Linux-based systems (Ubuntu and RHEL).
 type LinuxRenewer struct {
 	certPaths CertificatePaths
-	osType    string
+	osType    OSType
 }
 
-// NewLinuxRenewer creates a new LinuxRenewer
-func NewLinuxRenewer(certPaths CertificatePaths) *LinuxRenewer {
-	return &LinuxRenewer{
-		certPaths: certPaths,
-		osType:    string(OSTypeUbuntu),
-	}
+// NewLinuxRenewer creates a new LinuxRenewer with the specified certificate paths and OS type.
+func NewLinuxRenewer(paths CertificatePaths, osType OSType) *LinuxRenewer {
+	return &LinuxRenewer{certPaths: paths, osType: osType}
 }
 
-// RenewControlPlaneCerts renews control plane certificates on a Linux node
-func (l *LinuxRenewer) RenewControlPlaneCerts(ctx context.Context, node string, config *RenewalConfig, component string, sshRunner SSHRunner, backupDir string) error {
-	fmt.Printf("Processing control plane node: %s...\n", node)
+// RenewControlPlaneCerts renews control plane certificates on a Linux node.
+func (l *LinuxRenewer) RenewControlPlaneCerts(ctx context.Context, node string, cfg *RenewalConfig, component string, ssh SSHRunner, backupDir string) error {
+	// fmt.Printf("Processing control plane node (%s): %s...\n", l.osName(), node)
+	// logger.Info("Processing control plane node", "os", l.osName(), "node", node)
+	logger.V(2).Info(fmt.Sprintf("Processing node %s...", node))
 
-	// Backup certificates, excluding etcd directory if component is control-plane
-	var backupCmd string
-	if component == componentControlPlane && len(config.Etcd.Nodes) > 0 {
-		// When only updating control plane with external etcd, exclude etcd directory
-		backupCmd = fmt.Sprintf(`
-sudo mkdir -p '/etc/kubernetes/pki.bak_%[1]s'
-cd %[2]s
-for f in $(find . -type f ! -path './etcd/*'); do
-    sudo mkdir -p $(dirname '/etc/kubernetes/pki.bak_%[1]s/'$f)
-    sudo cp $f '/etc/kubernetes/pki.bak_%[1]s/'$f
-done`, backupDir, l.certPaths.ControlPlaneCertDir)
-	} else {
-		backupCmd = fmt.Sprintf("sudo cp -r '%s' '/etc/kubernetes/pki.bak_%s'",
-			l.certPaths.ControlPlaneCertDir, backupDir)
-	}
-	if err := sshRunner.RunCommand(ctx, node, backupCmd); err != nil {
-		return fmt.Errorf("failed to backup certificates: %v", err)
-	}
+	hasExternalEtcd := cfg != nil && len(cfg.Etcd.Nodes) > 0
 
-	// Renew certificates
-	fmt.Printf("Renewing certificates on node %s...\n", node)
-	renewCmd := "sudo kubeadm certs renew all"
-	if component == componentControlPlane && len(config.Etcd.Nodes) > 0 {
-		// When only renewing control plane certs with external etcd,
-		// we need to skip the etcd directory to preserve certificates
-		renewCmd = `for cert in admin.conf apiserver apiserver-kubelet-client controller-manager.conf front-proxy-client scheduler.conf; do
-            sudo kubeadm certs renew $cert
-        done`
+	builder := NewLinuxControlPlaneCommandBuilder(l.certPaths, backupDir, component, hasExternalEtcd)
+	cmds := builder.Build()
+
+	if err := ssh.RunCommand(ctx, node, cmds.Backup); err != nil {
+		logger.MarkFail("Failed to backup certificates on node", "node", node)
+		return fmt.Errorf("backup certs: %v", err)
 	}
-	if err := sshRunner.RunCommand(ctx, node, renewCmd); err != nil {
-		return fmt.Errorf("failed to renew certificates: %v", err)
+	if err := ssh.RunCommand(ctx, node, cmds.Renew); err != nil {
+		logger.MarkFail("Failed to renew certificates on node", "node", node)
+		return fmt.Errorf("renew certs: %v", err)
+	}
+	if err := ssh.RunCommand(ctx, node, cmds.Validate); err != nil {
+		logger.MarkFail("Failed to validate certificates on node", "node", node)
+		return fmt.Errorf("validate certs: %v", err)
+	}
+	if err := ssh.RunCommand(ctx, node, cmds.Restart); err != nil {
+		logger.MarkFail("Failed to restart pods on node", "node", node)
+		return fmt.Errorf("restart pods: %v", err)
 	}
 
-	// Validate certificates
-	fmt.Printf("Validating certificates on node %s...\n", node)
-	validateCmd := "sudo kubeadm certs check-expiration"
-	if err := sshRunner.RunCommand(ctx, node, validateCmd); err != nil {
-		return fmt.Errorf("certificate validation failed: %v", err)
-	}
-
-	// Restart
-	fmt.Printf("Restarting control plane components on node %s...\n", node)
-	restartCmd := fmt.Sprintf("sudo mkdir -p /tmp/manifests && "+
-		"sudo mv %s/* /tmp/manifests/ && "+
-		"sleep 20 && "+
-		"sudo mv /tmp/manifests/* %s/",
-		l.certPaths.ControlPlaneManifests, l.certPaths.ControlPlaneManifests)
-	if err := sshRunner.RunCommand(ctx, node, restartCmd); err != nil {
-		return fmt.Errorf("failed to restart control plane components: %v", err)
-	}
-
-	fmt.Printf("✅ Completed renewing certificate for the control node: %s.\n", node)
-	fmt.Printf("---------------------------------------------\n")
+	// fmt.Printf("✅ Completed renewing certificate for control node: %s.\n---------------------------------------------\n", node)
+	// logger.MarkPass("Completed renewing certificate for control node", "node", node)
+	logger.MarkPass(fmt.Sprintf("Renewed certificates for node %s", node))
 	return nil
 }
 
-// RenewEtcdCerts renews etcd certificates on a Linux node
-func (l *LinuxRenewer) RenewEtcdCerts(ctx context.Context, node string, sshRunner SSHRunner, backupDir string) error {
-	fmt.Printf("Processing etcd node: %s...\n", node)
+// RenewEtcdCerts renews etcd certificates on a Linux node.
+func (l *LinuxRenewer) RenewEtcdCerts(ctx context.Context, node string, ssh SSHRunner, backupDir string) error {
+	// fmt.Printf("Processing etcd node (%s): %s...\n", l.osName(), node)
+	// logger.Info("Processing etcd node", "os", l.osName(), "node", node)
+	logger.V(2).Info("Processing etcd node", "os", l.osType, "node", node)
 
-	// Backup certificates
-	fmt.Printf("# Backup certificates\n")
-	backupCmd := fmt.Sprintf("cd %s && sudo cp -r pki pki.bak_%s && sudo rm -rf pki/* && sudo cp pki.bak_%s/ca.* pki/",
-		l.certPaths.EtcdCertDir, backupDir, backupDir)
-	if err := sshRunner.RunCommand(ctx, node, backupCmd); err != nil {
-		return fmt.Errorf("failed to backup certificates: %v", err)
+	builder := NewLinuxEtcdCommandBuilder(l.certPaths, backupDir)
+	cmds := builder.Build()
+
+	if err := ssh.RunCommand(ctx, node, cmds.Backup); err != nil {
+		logger.MarkFail("Failed to backup certificates on node", "node", node)
+		return fmt.Errorf("backup certs: %v", err)
+	}
+	if err := ssh.RunCommand(ctx, node, cmds.Renew); err != nil {
+		logger.MarkFail("Failed to renew certificates on node", "node", node)
+		return fmt.Errorf("renew certs: %v", err)
+	}
+	if err := ssh.RunCommand(ctx, node, cmds.Validate); err != nil {
+		logger.MarkFail("Failed to validate certificates on node", "node", node)
+		return fmt.Errorf("validate certs: %v", err)
 	}
 
-	// Renew certificates
-	fmt.Printf("# Renew certificates\n")
-	renewCmd := "sudo etcdadm join phase certificates http://eks-a-etcd-dumb-url"
-	if err := sshRunner.RunCommand(ctx, node, renewCmd); err != nil {
-		return fmt.Errorf("failed to renew certificates: %v", err)
+	if err := l.copyEtcdCerts(ctx, node, ssh, backupDir); err != nil {
+		logger.MarkFail("Failed to copy certificates from node", "node", node)
+		return fmt.Errorf("copy certs: %v", err)
 	}
 
-	// Validate certificates
-	fmt.Printf("# Validate certificates\n")
-	validateCmd := fmt.Sprintf("sudo etcdctl --cacert=%s/pki/ca.crt "+
-		"--cert=%s/pki/etcdctl-etcd-client.crt "+
-		"--key=%s/pki/etcdctl-etcd-client.key "+
-		"endpoint health",
-		l.certPaths.EtcdCertDir, l.certPaths.EtcdCertDir, l.certPaths.EtcdCertDir)
-	if err := sshRunner.RunCommand(ctx, node, validateCmd); err != nil {
-		return fmt.Errorf("certificate validation failed: %v", err)
+	// fmt.Printf("✅ Completed renewing certificate for ETCD node: %s.\n---------------------------------------------\n", node)
+	// logger.MarkPass("Completed renewing certificate for ETCD node", "node", node)
+	logger.MarkPass(fmt.Sprintf("Renewed certificates for etcd node %s", node))
+	return nil
+}
+
+// func (l *LinuxRenewer) osName() string {
+// 	switch l.osType {
+// 	case OSTypeUbuntu:
+// 		return "Ubuntu"
+// 	case OSTypeRHEL:
+// 		return "RHEL"
+// 	default:
+// 		return string(l.osType)
+// 	}
+// }
+
+func (l *LinuxRenewer) copyEtcdCerts(ctx context.Context, node string, ssh SSHRunner, backupDir string) error {
+	etcdDir := l.certPaths.EtcdCertDir
+	cat := func(file string) (string, error) {
+		cmd := fmt.Sprintf("sudo cat %s/%s", etcdDir, file)
+		return ssh.RunCommandWithOutput(ctx, node, cmd)
 	}
 
-	fmt.Printf("✅ Completed renewing certificate for the ETCD node: %s.\n", node)
-	fmt.Printf("---------------------------------------------\n")
+	crt, err := cat("pki/apiserver-etcd-client.crt")
+	if err != nil {
+		logger.MarkFail("Failed to read certificate from node", "node", node)
+		return fmt.Errorf("read crt: %v", err)
+	}
+	key, err := cat("pki/apiserver-etcd-client.key")
+	if err != nil {
+		logger.MarkFail("Failed to read key from node", "node", node)
+		return fmt.Errorf("read key: %v", err)
+	}
+
+	if crt == "" || key == "" {
+		logger.MarkFail("Certificate or key is empty")
+		return fmt.Errorf("etcd client cert or key is empty")
+	}
+
+	dstDir := filepath.Join(backupDir, tempLocalEtcdCertsDir)
+	if err := os.MkdirAll(dstDir, 0o700); err != nil {
+		logger.MarkFail("Failed to create directory", "path", dstDir)
+		return fmt.Errorf("mkdir %s: %v", dstDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dstDir, "apiserver-etcd-client.crt"),
+		[]byte(crt), 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dstDir, "apiserver-etcd-client.key"),
+		[]byte(key), 0o600); err != nil {
+		return err
+	}
+	// fmt.Printf("✅ Copied etcd client certs to %s\n", dstDir)
+	// logger.MarkPass("Copied etcd client certs", "path", dstDir)
+	logger.V(2).Info("Copied etcd client certs", "path", dstDir)
 	return nil
 }
