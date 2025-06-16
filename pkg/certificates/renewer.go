@@ -105,11 +105,11 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 	keyPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
 	crtData, err := os.ReadFile(crtPath)
 	if err != nil {
-		return fmt.Errorf("failed to read certificate file: %v", err)
+		return fmt.Errorf("read certificate file: %v", err)
 	}
 	keyData, err := os.ReadFile(keyPath)
 	if err != nil {
-		return fmt.Errorf("failed to read key file: %v", err)
+		return fmt.Errorf("read key file: %v", err)
 	}
 
 	secretName := fmt.Sprintf("%s-apiserver-etcd-client", clusterName)
@@ -117,7 +117,7 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 	err = r.kube.Get(ctx, secretName, constants.EksaSystemNamespace, secret)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to get secret %s: %v", secretName, err)
+			return fmt.Errorf("get secret %s: %v", secretName, err)
 		}
 
 		newSecret := &corev1.Secret{
@@ -126,7 +126,7 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 			Data:       map[string][]byte{"tls.crt": crtData, "tls.key": keyData},
 		}
 		if err = r.kube.Create(ctx, newSecret); err != nil {
-			return fmt.Errorf("failed to create secret %s: %v", secretName, err)
+			return fmt.Errorf("create secret %s: %v", secretName, err)
 		}
 	} else {
 		if secret.Data == nil {
@@ -136,7 +136,7 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 		secret.Data["tls.crt"] = crtData
 		secret.Data["tls.key"] = keyData
 		if err = r.kube.Update(ctx, secret); err != nil {
-			return fmt.Errorf("failed to update secret %s: %v", secretName, err)
+			return fmt.Errorf("update secret %s: %v", secretName, err)
 		}
 	}
 	logger.V(2).Info("Successfully updated secret", "name", secretName)
@@ -178,9 +178,6 @@ func (r *Renewer) validateRenewalConfig(cfg *RenewalConfig, component string) (p
 	processControlPlane = ShouldProcessComponent(component, constants.ControlPlaneComponent)
 
 	if processEtcd {
-		if err := ValidateNodesPresence(cfg.Etcd.Nodes, constants.EtcdComponent); err != nil {
-			return false, false, fmt.Errorf("validating etcd nodes: %v", err)
-		}
 		if err := r.ssh.InitSSHConfig(cfg.Etcd.SSH); err != nil {
 			return false, false, fmt.Errorf("initializing SSH config for etcd: %v", err)
 		}

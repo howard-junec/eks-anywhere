@@ -60,38 +60,80 @@ func checkTestError(t *testing.T, err error, expectError bool, errorMsg string) 
 
 // TestValidateComponent tests the validateComponent function.
 func TestValidateComponent(t *testing.T) {
+	testConfig := &certificates.RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          "ubuntu",
+		ControlPlane: certificates.NodeConfig{
+			Nodes: []string{"192.168.1.10"},
+			SSH: certificates.SSHConfig{
+				User:    "ec2-user",
+				KeyPath: "/tmp/test-key",
+			},
+		},
+		Etcd: certificates.NodeConfig{
+			Nodes: []string{"192.168.1.20"},
+			SSH: certificates.SSHConfig{
+				User:    "ec2-user",
+				KeyPath: "/tmp/test-key",
+			},
+		},
+	}
+
 	tests := []struct {
 		name        string
 		component   string
+		config      *certificates.RenewalConfig
 		expectError bool
 		errorMsg    string
 	}{
 		{
 			name:        "valid etcd component",
 			component:   constants.EtcdComponent,
+			config:      testConfig,
 			expectError: false,
 		},
 		{
 			name:        "valid control-plane component",
 			component:   constants.ControlPlaneComponent,
+			config:      testConfig,
 			expectError: false,
 		},
 		{
 			name:        "empty component",
 			component:   "",
+			config:      testConfig,
 			expectError: false,
 		},
 		{
 			name:        "invalid component",
 			component:   "invalid",
+			config:      testConfig,
 			expectError: true,
 			errorMsg:    "invalid component",
+		},
+		{
+			name:      "etcd component with no etcd nodes",
+			component: constants.EtcdComponent,
+			config: &certificates.RenewalConfig{
+				ClusterName: "test-cluster",
+				OS:          "ubuntu",
+				ControlPlane: certificates.NodeConfig{
+					Nodes: []string{"192.168.1.10"},
+					SSH: certificates.SSHConfig{
+						User:    "ec2-user",
+						KeyPath: "/tmp/test-key",
+					},
+				},
+				Etcd: certificates.NodeConfig{},
+			},
+			expectError: true,
+			errorMsg:    "no external etcd nodes defined",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := certificates.ValidateComponent(tt.component)
+			err := certificates.ValidateComponentWithConfig(tt.component, tt.config)
 			checkTestError(t, err, tt.expectError, tt.errorMsg)
 		})
 	}

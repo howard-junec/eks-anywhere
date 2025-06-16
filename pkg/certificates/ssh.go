@@ -115,7 +115,7 @@ func (r *DefaultSSHRunner) parsePrivateKey(key []byte, keyPath, passwd string) (
 func (r *DefaultSSHRunner) RunCommand(ctx context.Context, node string, cmds []string) error {
 	client, err := r.sshDialer("tcp", fmt.Sprintf("%s:22", node), r.sshConfig)
 	if err != nil {
-		return fmt.Errorf("failed to connect to node %s: %v", node, err)
+		return fmt.Errorf("connect to node %s: %v", node, err)
 	}
 	defer client.Close()
 
@@ -176,7 +176,7 @@ func (r *DefaultSSHRunner) executeCommand(session *ssh.Session, cmd string, node
 func (r *DefaultSSHRunner) RunCommandWithOutput(ctx context.Context, node string, cmds []string) (string, error) {
 	client, err := r.sshDialer("tcp", fmt.Sprintf("%s:22", node), r.sshConfig)
 	if err != nil {
-		return "", fmt.Errorf("failed to connect to node %s: %v", node, err)
+		return "", fmt.Errorf("connect to node %s: %v", node, err)
 	}
 	defer client.Close()
 

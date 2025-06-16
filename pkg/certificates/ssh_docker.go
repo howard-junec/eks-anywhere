@@ -50,24 +50,7 @@ func (r *DockerSSHRunner) InitSSHConfig(cfg SSHConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	sshPassword := cfg.Password
-	if sshPassword == "" {
-
-		componentType := "CP"
-		if strings.Contains(strings.ToLower(cfg.KeyPath), "etcd") {
-			componentType = "ETCD"
-		}
-
-		componentEnvVar := "EKSA_SSH_KEY_PASSPHRASE_" + componentType
-
-		generalEksaEnvVar := "EKSA_SSH_KEY_PASSPHRASE"
-
-		if envPassword := os.Getenv(componentEnvVar); envPassword != "" {
-			sshPassword = envPassword
-		} else if envPassword := os.Getenv(generalEksaEnvVar); envPassword != "" {
-			sshPassword = envPassword
-		}
-	}
+	sshPassword := getSSHPassword(cfg)
 
 	const sentinel = "/tmp/agent_ready"
 	agentReady := exec.CommandContext(ctx, "docker", "exec", r.containerName, "test", "-f", sentinel).Run() == nil
@@ -143,19 +126,7 @@ func (r *DockerSSHRunner) run(
 	}
 
 	cmdStr := strings.Join(cmds, " && ")
-	dockerArgs := []string{
-		"exec", "-i",
-		r.containerName,
-		"ssh",
-	}
-	if !r.useAgent {
-		dockerArgs = append(dockerArgs, "-i", r.sshConfig.KeyPath)
-	}
-	dockerArgs = append(dockerArgs,
-		"-o", "StrictHostKeyChecking=no",
-		fmt.Sprintf("%s@%s", r.sshConfig.User, node),
-		cmdStr,
-	)
+	dockerArgs := r.buildDockerSSHCommand(node, cmdStr)
 
 	// Build exec.Cmd
 	c := exec.CommandContext(ctx, "docker", dockerArgs...)
@@ -190,6 +161,24 @@ func (r *DockerSSHRunner) run(
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+func (r *DockerSSHRunner) buildDockerSSHCommand(node string, cmdStr string) []string {
+	dockerArgs := []string{
+		"exec", "-i",
+		r.containerName,
+		"ssh",
+	}
+	if !r.useAgent {
+		dockerArgs = append(dockerArgs, "-i", r.sshConfig.KeyPath)
+	}
+	dockerArgs = append(dockerArgs,
+		"-o", "StrictHostKeyChecking=no",
+		fmt.Sprintf("%s@%s", r.sshConfig.User, node),
+		cmdStr,
+	)
+
+	return dockerArgs
+}
+
 func (r *DockerSSHRunner) executeWithTimeout(ctx context.Context, cmd *exec.Cmd) error {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Run() }()
@@ -208,4 +197,30 @@ func (r *DockerSSHRunner) isAgentLoaded(ctx context.Context) bool {
 		ctx, "docker", "exec", "-i", r.containerName, "ssh-add", "-l",
 	)
 	return cmd.Run() == nil
+}
+
+func getSSHPassword(cfg SSHConfig) string {
+	if cfg.Password != "" {
+		return cfg.Password
+	}
+
+	if cfg.component != "" {
+		componentEnvVar := "EKSA_SSH_KEY_PASSPHRASE_" + cfg.component
+		if envPassword := os.Getenv(componentEnvVar); envPassword != "" {
+			return envPassword
+		}
+	} else {
+		if envPassword := os.Getenv("EKSA_SSH_KEY_PASSPHRASE_ETCD"); envPassword != "" {
+			return envPassword
+		}
+		if envPassword := os.Getenv("EKSA_SSH_KEY_PASSPHRASE_CP"); envPassword != "" {
+			return envPassword
+		}
+	}
+
+	if envPassword := os.Getenv("EKSA_SSH_KEY_PASSPHRASE"); envPassword != "" {
+		return envPassword
+	}
+
+	return ""
 }

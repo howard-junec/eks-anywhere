@@ -17,9 +17,10 @@ var VerbosityLevel int
 
 // SSHConfig holds the SSH credential information.
 type SSHConfig struct {
-	User     string `yaml:"sshUser"`
-	KeyPath  string `yaml:"sshKey"`
-	Password string `yaml:"sshPasswd,omitempty"` // Optional SSH key passphrase.
+	User      string `yaml:"sshUser"`
+	KeyPath   string `yaml:"sshKey"`
+	Password  string `yaml:"sshPasswd,omitempty"` // Optional SSH key passphrase.
+	component string
 }
 
 // NodeConfig holds configuration for a group of nodes.
@@ -101,18 +102,14 @@ func validateNodeConfig(config *NodeConfig, componentName string) error {
 	return nil
 }
 
-// ValidateComponent checks if the specified component is valid.
-func ValidateComponent(component string) error {
-	if component != "" && component != constants.EtcdComponent && component != constants.ControlPlaneComponent {
-		return fmt.Errorf("invalid component %q, must be either %q or %q", component, constants.EtcdComponent, constants.ControlPlaneComponent)
-	}
-	return nil
-}
-
 // ValidateComponentWithConfig validates that the specified component is compatible with the configuration.
 func ValidateComponentWithConfig(component string, config *RenewalConfig) error {
-	if err := ValidateComponent(component); err != nil {
-		return err
+	if component == "" {
+		return nil
+	}
+
+	if component != constants.EtcdComponent && component != constants.ControlPlaneComponent {
+		return fmt.Errorf("invalid component %q, must be either %q or %q", component, constants.EtcdComponent, constants.ControlPlaneComponent)
 	}
 
 	if component == constants.EtcdComponent && len(config.Etcd.Nodes) == 0 {
@@ -157,21 +154,22 @@ func GetSSHKeyDirs(cfg *RenewalConfig) []string {
 // PreloadAllSSHKeys initializes SSH configurations for all keys in the renewal config.
 func PreloadAllSSHKeys(r SSHRunner, cfg *RenewalConfig) error {
 	seen := map[string]struct{}{}
-	load := func(sc SSHConfig) error {
+	load := func(sc SSHConfig, component string) error {
 		if _, ok := seen[sc.KeyPath]; ok {
 			return nil
 		}
+		sc.component = component
 		if err := r.InitSSHConfig(sc); err != nil {
 			return err
 		}
 		seen[sc.KeyPath] = struct{}{}
 		return nil
 	}
-	if err := load(cfg.ControlPlane.SSH); err != nil {
+	if err := load(cfg.ControlPlane.SSH, "CP"); err != nil {
 		return fmt.Errorf("loading control-plane key: %w", err)
 	}
 	if len(cfg.Etcd.Nodes) > 0 {
-		if err := load(cfg.Etcd.SSH); err != nil {
+		if err := load(cfg.Etcd.SSH, "ETCD"); err != nil {
 			return fmt.Errorf("loading etcd key: %w", err)
 		}
 	}

@@ -44,8 +44,6 @@ func init() {
 
 // newRenewerForCmd builds dependencies & returns a ready to-use Renewer.
 func newRenewerForCmd(ctx context.Context, cfg *certificates.RenewalConfig) (*certificates.Renewer, error) {
-	// ssh key in container
-
 	mountDirs := certificates.GetSSHKeyDirs(cfg)
 
 	deps, err := dependencies.NewFactory().
@@ -58,28 +56,25 @@ func newRenewerForCmd(ctx context.Context, cfg *certificates.RenewalConfig) (*ce
 		return nil, err
 	}
 
-	var sshRunner certificates.SSHRunner
-	if executables.ExecutablesInDocker() {
-		sshRunner, err = certificates.NewDockerSSHRunner(
-			deps.ExecutableBuilder.ContainerName(),
-			cfg.ControlPlane.SSH,
-		)
-		if err != nil {
-			return nil, err
-		}
+	if !executables.ExecutablesInDocker() {
+		return nil, fmt.Errorf("certificate renewal operations must be run in a container; please do not set MR_TOOLS_DISABLE=true")
+	}
 
-		if err := certificates.PreloadAllSSHKeys(sshRunner, cfg); err != nil {
-			return nil, err
-		}
+	sshRunner, err := certificates.NewDockerSSHRunner(
+		deps.ExecutableBuilder.ContainerName(),
+		cfg.ControlPlane.SSH,
+	)
+	if err != nil {
+		return nil, err
+	}
 
-	} else {
-		sshRunner = certificates.NewSSHRunner()
+	if err := certificates.PreloadAllSSHKeys(sshRunner, cfg); err != nil {
+		return nil, err
 	}
 
 	kubeCfgPath := kubeconfig.FromClusterName(cfg.ClusterName)
 	kubeClient := deps.UnAuthKubeClient.KubeconfigClient(kubeCfgPath)
 
-	// sshRunner := certificates.NewSSHRunner()
 	osKey := cfg.OS
 	if osKey == string(v1alpha1.Ubuntu) || osKey == string(v1alpha1.RedHat) {
 		osKey = string(certificates.OSTypeLinux)
