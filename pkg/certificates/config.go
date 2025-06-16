@@ -4,6 +4,7 @@ package certificates
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v2"
 
@@ -11,31 +12,20 @@ import (
 	"github.com/aws/eks-anywhere/pkg/constants"
 )
 
-// Constants for certificate paths and components.
-const (
-	tempLocalEtcdCertsDir = "etcd-client-certs"
-
-	// Ubuntu/RHEL paths.
-	ubuntuEtcdCertDir           = "/etc/etcd"
-	ubuntuControlPlaneCertDir   = "/etc/kubernetes/pki"
-	ubuntuControlPlaneManifests = "/etc/kubernetes/manifests"
-
-	// Bottlerocket paths.
-	bottlerocketEtcdCertDir         = "/var/lib/etcd"
-	bottlerocketControlPlaneCertDir = "/var/lib/kubeadm/pki"
-	bottlerocketTmpDir              = "/run/host-containerd/io.containerd.runtime.v2.task/default/admin/rootfs/tmp"
-)
-
-// VerbosityLevel controls the detail level of logging output during certificate operations.
+// VerbosityLevel controls the detail level of logging output.
 var VerbosityLevel int
 
-// NodeConfig holds SSH configuration for a node group.
+// SSHConfig holds the SSH credential information.
+type SSHConfig struct {
+	User     string `yaml:"sshUser"`
+	KeyPath  string `yaml:"sshKey"`
+	Password string `yaml:"sshPasswd,omitempty"` // Optional SSH key passphrase.
+}
+
+// NodeConfig holds configuration for a group of nodes.
 type NodeConfig struct {
-	Nodes []string `yaml:"nodes"`
-	// OS        string   `yaml:"os"`
-	SSHKey    string `yaml:"sshKey"`
-	SSHUser   string `yaml:"sshUser"`
-	SSHPasswd string `yaml:"sshPasswd,omitempty"` // Optional SSH key passphrase.
+	Nodes []string  `yaml:"nodes"`
+	SSH   SSHConfig `yaml:"ssh"`
 }
 
 // RenewalConfig defines the configuration for certificate renewal operations.
@@ -67,49 +57,45 @@ func ParseConfig(path string) (*RenewalConfig, error) {
 
 func validateConfig(config *RenewalConfig) error {
 	if config.ClusterName == "" {
-		return fmt.Errorf("cluster name is required")
+		return fmt.Errorf("clusterName is required")
 	}
 
 	if config.OS == "" {
-		return fmt.Errorf("OS is required")
+		return fmt.Errorf("os is required")
 	}
 
 	if config.OS != string(v1alpha1.Ubuntu) && config.OS != string(v1alpha1.RedHat) && config.OS != string(v1alpha1.Bottlerocket) {
-		return fmt.Errorf("unsupported OS %q", config.OS)
+		return fmt.Errorf("unsupported os %q", config.OS)
 	}
 
-	if len(config.ControlPlane.Nodes) == 0 {
-		return fmt.Errorf("at least one node is required in ControlPlane configuration")
+	if err := validateNodeConfig(&config.ControlPlane, "controlPlane"); err != nil {
+		return err
 	}
 
-	if err := validateNodeConfig(&config.ControlPlane); err != nil {
-		return fmt.Errorf("validating control plane: %v", err)
-	}
-
-	// Etcd nodes are optional (could be embedded in control plane).
+	// Etcd nodes are optional (for stacked etcd).
 	if len(config.Etcd.Nodes) > 0 {
-		if err := validateNodeConfig(&config.Etcd); err != nil {
-			return fmt.Errorf("validating etcd: %v", err)
+		if err := validateNodeConfig(&config.Etcd, "etcd"); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-func validateNodeConfig(config *NodeConfig) error {
+func validateNodeConfig(config *NodeConfig, componentName string) error {
 	if len(config.Nodes) == 0 {
-		return fmt.Errorf("nodes are required")
+		return fmt.Errorf("%s: nodes list cannot be empty", componentName)
 	}
 
-	if config.SSHKey == "" {
-		return fmt.Errorf("SSH key is required")
+	if config.SSH.User == "" {
+		return fmt.Errorf("%s: sshUser is required", componentName)
 	}
-	if config.SSHUser == "" {
-		return fmt.Errorf("SSH user is required")
+	if config.SSH.KeyPath == "" {
+		return fmt.Errorf("%s: sshKey is required", componentName)
 	}
 
-	if _, err := os.Stat(config.SSHKey); err != nil {
-		return fmt.Errorf("retrieving SSH key file information: %v", err)
+	if _, err := os.Stat(config.SSH.KeyPath); err != nil {
+		return fmt.Errorf("%s: validating sshKey path: %v", componentName, err)
 	}
 
 	return nil
@@ -136,12 +122,57 @@ func ValidateComponentWithConfig(component string, config *RenewalConfig) error 
 	return nil
 }
 
-// DetermineOSType determines the OS type to use based on the component.
-func DetermineOSType(_ string, config *RenewalConfig) string {
-	return config.OS
-}
-
 // ShouldProcessComponent checks if the specified component should be processed.
 func ShouldProcessComponent(requestedComponent, targetComponent string) bool {
 	return requestedComponent == "" || requestedComponent == targetComponent
+}
+
+// ValidateNodesPresence ensures that the slice of node ip is not empty.
+func ValidateNodesPresence(nodes []string, componentName string) error {
+	if len(nodes) == 0 {
+		return fmt.Errorf("%s: nodes list cannot be empty", componentName)
+	}
+	return nil
+}
+
+// for ssh key in container
+func GetSSHKeyDirs(cfg *RenewalConfig) []string {
+	set := map[string]struct{}{}
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		dir := filepath.Dir(p)
+		set[dir] = struct{}{}
+	}
+	add(cfg.ControlPlane.SSH.KeyPath)
+	add(cfg.Etcd.SSH.KeyPath)
+	dirs := make([]string, 0, len(set))
+	for d := range set {
+		dirs = append(dirs, d)
+	}
+	return dirs
+}
+
+func PreloadAllSSHKeys(r SSHRunner, cfg *RenewalConfig) error {
+	seen := map[string]struct{}{}
+	load := func(sc SSHConfig) error {
+		if _, ok := seen[sc.KeyPath]; ok {
+			return nil
+		}
+		if err := r.InitSSHConfig(sc); err != nil {
+			return err
+		}
+		seen[sc.KeyPath] = struct{}{}
+		return nil
+	}
+	if err := load(cfg.ControlPlane.SSH); err != nil {
+		return fmt.Errorf("loading control-plane key: %w", err)
+	}
+	if len(cfg.Etcd.Nodes) > 0 {
+		if err := load(cfg.Etcd.SSH); err != nil {
+			return fmt.Errorf("loading etcd key: %w", err)
+		}
+	}
+	return nil
 }

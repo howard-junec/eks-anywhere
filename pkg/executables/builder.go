@@ -170,3 +170,11 @@ func (c Closer) CheckErr(ctx context.Context) {
 		logger.Error(err, "Failed closing container for executables")
 	}
 }
+
+// For renew commands container
+func (b *ExecutablesBuilder) ContainerName() string {
+	if d, ok := b.executableBuilder.(*dockerExecutableBuilder); ok {
+		return d.container.ContainerName()
+	}
+	return ""
+}

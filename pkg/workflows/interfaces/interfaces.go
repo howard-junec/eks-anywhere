@@ -6,7 +6,6 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/aws/eks-anywhere/pkg/bootstrapper"
-	"github.com/aws/eks-anywhere/pkg/certificates"
 	"github.com/aws/eks-anywhere/pkg/clients/kubernetes"
 	"github.com/aws/eks-anywhere/pkg/cluster"
 	"github.com/aws/eks-anywhere/pkg/constants"
@@ -106,12 +105,6 @@ type ClusterDeleter interface {
 // ClusterMover moves the EKS-A cluster.
 type ClusterMover interface {
 	Move(ctx context.Context, spec *cluster.Spec, srcClient, dstClient kubernetes.Client) error
-}
-
-// CertificateRenewer renew the certificates.
-type CertificateRenewer interface {
-	RenewCertificates(ctx context.Context, cluster *types.Cluster,
-		config *certificates.RenewalConfig, component string) error
 }
 
 // AwsIamAuth is responsible for generating iam kubeconfigs.
