@@ -22,6 +22,7 @@ type LinuxRenewer struct {
 	osType OSType
 }
 
+// NewLinuxRenewer creates a new renewer for Linux-based operating systems.
 func NewLinuxRenewer() *LinuxRenewer { return &LinuxRenewer{osType: OSTypeLinux} }
 
 // RenewControlPlaneCerts renews control plane certificates on a Linux node.
@@ -39,7 +40,6 @@ func (l *LinuxRenewer) RenewControlPlaneCerts(ctx context.Context, node string, 
 		return fmt.Errorf("renew certs: %v", err)
 	}
 	if err := ssh.RunCommand(ctx, node, []string{"sudo kubeadm certs check-expiration"}); err != nil {
-
 		return fmt.Errorf("validate certs: %v", err)
 	}
 	if err := ssh.RunCommand(ctx, node, buildCPRestartCmd()); err != nil {

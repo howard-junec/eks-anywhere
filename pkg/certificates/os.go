@@ -9,6 +9,7 @@ import (
 type OSType string
 
 const (
+	// OSTypeLinux represents Linux-based operating systems.
 	OSTypeLinux OSType = "linux"
 	// OSTypeBottlerocket represents Bottlerocket OS.
 	OSTypeBottlerocket OSType = "bottlerocket"
@@ -33,7 +34,7 @@ func BuildOSRenewer(osType string) (OSRenewer, error) {
 	return osBuilder(), nil
 }
 
-// Map of OS type to OSRenewer builder functions
+// Map of OS type to OSRenewer builder functions.
 var osRenewerBuilders = map[string]func() OSRenewer{
 	string(OSTypeLinux): func() OSRenewer {
 		return NewLinuxRenewer()

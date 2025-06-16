@@ -19,11 +19,7 @@ type DockerSSHRunner struct {
 	useAgent      bool
 }
 
-// NewDockerSSHRunner returns an instance bound to a specific tools container.
-// func NewDockerSSHRunner(containerName string) *DockerSSHRunner {
-// 	return &DockerSSHRunner{containerName: containerName}
-// }
-
+// NewDockerSSHRunner creates a new SSH runner that executes commands inside a Docker container.
 func NewDockerSSHRunner(containerName string, cfg SSHConfig) (*DockerSSHRunner, error) {
 	r := &DockerSSHRunner{containerName: containerName}
 	if err := r.InitSSHConfig(cfg); err != nil {
@@ -32,16 +28,7 @@ func NewDockerSSHRunner(containerName string, cfg SSHConfig) (*DockerSSHRunner, 
 	return r, nil
 }
 
-// InitSSHConfig just stores the config; ssh key presence is checked lazily.
-// func (r *DockerSSHRunner) InitSSHConfig(cfg SSHConfig) error {
-// 	// Basic key existence check to fail fast.
-// 	if _, err := os.Stat(cfg.KeyPath); err != nil {
-// 		return fmt.Errorf("ssh key %s: %v", cfg.KeyPath, err)
-// 	}
-// 	r.sshConfig = cfg
-// 	return nil
-// }
-
+// InitSSHConfig initializes the SSH configuration and sets up the SSH agent in the container.
 func (r *DockerSSHRunner) InitSSHConfig(cfg SSHConfig) error {
 	if r.useAgent && r.sshConfig.KeyPath == cfg.KeyPath {
 		return nil
@@ -52,10 +39,7 @@ func (r *DockerSSHRunner) InitSSHConfig(cfg SSHConfig) error {
 	}
 	r.sshConfig = cfg
 
-	// ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	// defer cancel()
-
-	//fast path, ssh-agent already exists in container
+	// Fast path: ssh-agent already exists in container and keys are loaded
 	ctx, cancelFast := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelFast()
 	if r.isAgentLoaded(ctx) {
@@ -118,7 +102,7 @@ func (r *DockerSSHRunner) DownloadFile(
 	return os.WriteFile(local, []byte(out), 0o600)
 }
 
-// internal helper
+// internal helper.
 func (r *DockerSSHRunner) run(
 	ctx context.Context,
 	node string,
@@ -156,18 +140,10 @@ func (r *DockerSSHRunner) run(
 		c.Stderr = os.Stderr
 	}
 
-	// Run with timeout awareness.
-	done := make(chan error, 1)
-	go func() { done <- c.Run() }()
-
-	select {
-	case <-ctx.Done():
-		_ = c.Process.Kill() // ensure cleanup
-		return "", fmt.Errorf("cancelling command: %v", ctx.Err())
-	case err := <-done:
-		if err != nil {
-			return stderr.String(), fmt.Errorf("ssh error: %v; stderr: %s", err, stderr.String())
-		}
+	// Run with timeout awareness
+	err := r.executeWithTimeout(ctx, c)
+	if err != nil {
+		return stderr.String(), fmt.Errorf("ssh error: %v; stderr: %s", err, stderr.String())
 	}
 
 	// For cert-check verbosity mimicking DefaultSSHRunner
@@ -183,6 +159,19 @@ func (r *DockerSSHRunner) run(
 	}
 
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+func (r *DockerSSHRunner) executeWithTimeout(ctx context.Context, cmd *exec.Cmd) error {
+	done := make(chan error, 1)
+	go func() { done <- cmd.Run() }()
+
+	select {
+	case <-ctx.Done():
+		_ = cmd.Process.Kill() // ensure cleanup
+		return fmt.Errorf("cancelling command: %v", ctx.Err())
+	case err := <-done:
+		return err
+	}
 }
 
 func (r *DockerSSHRunner) isAgentLoaded(ctx context.Context) bool {

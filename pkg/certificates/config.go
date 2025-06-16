@@ -135,7 +135,7 @@ func ValidateNodesPresence(nodes []string, componentName string) error {
 	return nil
 }
 
-// for ssh key in container
+// GetSSHKeyDirs returns a list of directories containing SSH keys used in container.
 func GetSSHKeyDirs(cfg *RenewalConfig) []string {
 	set := map[string]struct{}{}
 	add := func(p string) {
@@ -154,6 +154,7 @@ func GetSSHKeyDirs(cfg *RenewalConfig) []string {
 	return dirs
 }
 
+// PreloadAllSSHKeys initializes SSH configurations for all keys in the renewal config.
 func PreloadAllSSHKeys(r SSHRunner, cfg *RenewalConfig) error {
 	seen := map[string]struct{}{}
 	load := func(sc SSHConfig) error {

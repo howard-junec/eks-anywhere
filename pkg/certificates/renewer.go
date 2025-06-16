@@ -19,6 +19,7 @@ import (
 
 const tempLocalEtcdCertsDir = "etcd-client-certs"
 
+// Renewer handles the certificate renewal process for EKS Anywhere clusters.
 type Renewer struct {
 	backupDir string
 	kube      kubernetes.Client
@@ -26,6 +27,7 @@ type Renewer struct {
 	os        OSRenewer
 }
 
+// NewRenewer creates a new certificate renewer instance with a timestamped backup directory.
 func NewRenewer(kube kubernetes.Client, sshRunner SSHRunner, osRenewer OSRenewer) (*Renewer, error) {
 	ts := time.Now().Format("20060102_150405")
 	backupDir := "certificate_backup_" + ts
@@ -41,56 +43,53 @@ func NewRenewer(kube kubernetes.Client, sshRunner SSHRunner, osRenewer OSRenewer
 	}, nil
 }
 
+// RenewCertificates orchestrates the certificate renewal process for the specified component.
 func (r *Renewer) RenewCertificates(ctx context.Context, cfg *RenewalConfig, component string) error {
+	if err := r.validateRenewalConfig(cfg, component); err != nil {
+		return err
+	}
 
-	if err := r.processEtcdRenewal(ctx, cfg, component); err != nil {
-		return err
+	if ShouldProcessComponent(component, constants.EtcdComponent) && len(cfg.Etcd.Nodes) > 0 {
+		if err := r.renewEtcdCerts(ctx, cfg); err != nil {
+			return err
+		}
 	}
-	if err := r.processControlPlaneRenewal(ctx, cfg, component); err != nil {
-		return err
+
+	if ShouldProcessComponent(component, constants.ControlPlaneComponent) {
+		if err := r.renewControlPlaneCerts(ctx, cfg, component); err != nil {
+			return err
+		}
 	}
+
 	return r.finishRenewal()
 }
 
-func (r *Renewer) processEtcdRenewal(ctx context.Context, cfg *RenewalConfig, component string) error {
-	if !ShouldProcessComponent(component, constants.EtcdComponent) {
-		return nil
-	}
-	if err := ValidateNodesPresence(cfg.Etcd.Nodes, constants.EtcdComponent); err != nil {
-		logger.Info(err.Error())
-		return nil
-	}
+func (r *Renewer) renewEtcdCerts(ctx context.Context, cfg *RenewalConfig) error {
 	logger.MarkPass("Starting etcd certificate renewal process")
 
-	if err := r.ssh.InitSSHConfig(cfg.Etcd.SSH); err != nil {
-		return fmt.Errorf("initializing SSH config for etcd: %v", err)
-	}
 	for _, node := range cfg.Etcd.Nodes {
 		if err := r.os.RenewEtcdCerts(ctx, node, r.ssh, r.backupDir); err != nil {
 			return fmt.Errorf("renewing certificates for etcd node %s: %v", node, err)
 		}
 	}
+
 	if err := r.updateAPIServerEtcdClientSecret(ctx, cfg.ClusterName); err != nil {
 		return err
 	}
+
 	logger.MarkSuccess("Etcd certificate renewal process completed successfully.")
 	return nil
 }
 
-func (r *Renewer) processControlPlaneRenewal(ctx context.Context, cfg *RenewalConfig, component string) error {
-	if !ShouldProcessComponent(component, constants.ControlPlaneComponent) {
-		return nil
-	}
+func (r *Renewer) renewControlPlaneCerts(ctx context.Context, cfg *RenewalConfig, component string) error {
 	logger.MarkPass("Starting control plane certificate renewal process")
 
-	if err := r.ssh.InitSSHConfig(cfg.ControlPlane.SSH); err != nil {
-		return fmt.Errorf("initializing SSH config for control-plane: %v", err)
-	}
 	for _, node := range cfg.ControlPlane.Nodes {
 		if err := r.os.RenewControlPlaneCerts(ctx, node, cfg, component, r.ssh, r.backupDir); err != nil {
 			return fmt.Errorf("renewing certificates for control-plane node %s: %v", node, err)
 		}
 	}
+
 	logger.MarkSuccess("Control plane certificate renewal process completed successfully.")
 	return nil
 }
@@ -171,4 +170,25 @@ func (r *Renewer) cleanup() error {
 		return fmt.Errorf("changing permissions: %v", err)
 	}
 	return os.RemoveAll(r.backupDir)
+}
+
+func (r *Renewer) validateRenewalConfig(cfg *RenewalConfig, component string) error {
+	if ShouldProcessComponent(component, constants.EtcdComponent) && len(cfg.Etcd.Nodes) > 0 {
+		if err := ValidateNodesPresence(cfg.Etcd.Nodes, constants.EtcdComponent); err != nil {
+			logger.Info(err.Error())
+			return nil
+		}
+
+		if err := r.ssh.InitSSHConfig(cfg.Etcd.SSH); err != nil {
+			return fmt.Errorf("initializing SSH config for etcd: %v", err)
+		}
+	}
+
+	if ShouldProcessComponent(component, constants.ControlPlaneComponent) {
+		if err := r.ssh.InitSSHConfig(cfg.ControlPlane.SSH); err != nil {
+			return fmt.Errorf("initializing SSH config for control-plane: %v", err)
+		}
+	}
+
+	return nil
 }

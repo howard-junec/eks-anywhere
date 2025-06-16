@@ -147,7 +147,6 @@ func (b *BottlerocketRenewer) RenewEtcdCerts(ctx context.Context, node string, s
 }
 
 func (b *BottlerocketRenewer) copyEtcdCerts(ctx context.Context, node string, sshRunner SSHRunner, backupDir string) error {
-
 	logger.V(2).Info("Reading certificate from ETCD node", "node", node)
 	logger.V(2).Info("Using backup directory", "path", backupDir)
 
@@ -158,7 +157,6 @@ func (b *BottlerocketRenewer) copyEtcdCerts(ctx context.Context, node string, ss
 	}
 
 	crtContent, err := sshRunner.RunCommandWithOutput(ctx, node, buildBRReadTmpCertCmd(remoteTempDir))
-
 	if err != nil {
 		return fmt.Errorf("read certificate file: %v", err)
 	}
@@ -267,7 +265,6 @@ func copyFile(src, dest string) error {
 }
 
 func (b *BottlerocketRenewer) checkCertificates(ctx context.Context, node string, sshRunner SSHRunner) {
-
 	checkCmds := buildBRSheltieCmd(
 		buildBRImagePullCmd(),
 		buildBRControlPlaneCheckCertsCmd(),

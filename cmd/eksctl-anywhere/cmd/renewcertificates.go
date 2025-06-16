@@ -50,11 +50,10 @@ func newRenewerForCmd(ctx context.Context, cfg *certificates.RenewalConfig) (*ce
 
 	deps, err := dependencies.NewFactory().
 		WithExecutableBuilder().
-		WithExecutableMountDirs(mountDirs...). //ssh key in container
+		WithExecutableMountDirs(mountDirs...). // ssh key in container
 		WithKubectl().
 		WithUnAuthKubeClient().
 		Build(ctx)
-
 	if err != nil {
 		return nil, err
 	}

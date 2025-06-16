@@ -171,7 +171,7 @@ func (c Closer) CheckErr(ctx context.Context) {
 	}
 }
 
-// For renew commands container
+// ContainerName returns the name of the container used for renew commands.
 func (b *ExecutablesBuilder) ContainerName() string {
 	if d, ok := b.executableBuilder.(*dockerExecutableBuilder); ok {
 		return d.container.ContainerName()

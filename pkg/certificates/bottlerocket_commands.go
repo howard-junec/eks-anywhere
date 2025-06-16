@@ -6,11 +6,6 @@ import (
 	"github.com/aws/eks-anywhere/pkg/constants"
 )
 
-func buildBRShelliePrefixCmd() []string {
-	return []string{`set -euo pipefail
-sudo sheltie << 'EOF'`}
-}
-
 func buildBRImagePullCmd() []string {
 	return []string{
 		`IMAGE_ID=$(apiclient get | apiclient exec admin jq -r '.settings["host-containers"]["kubeadm-bootstrap"].source')
