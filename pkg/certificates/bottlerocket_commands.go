@@ -17,11 +17,8 @@ func buildBRControlPlaneBackupCertsCmd(component string, hasExternalEtcd bool, b
 	var script string
 	if component == constants.ControlPlaneComponent && hasExternalEtcd {
 		script = fmt.Sprintf(`mkdir -p '/etc/kubernetes/pki.bak_%[1]s'
-cd %[2]s
-for f in $(find . -type f ! -path './etcd/*'); do
-    mkdir -p $(dirname '/etc/kubernetes/pki.bak_%[1]s/'$f)
-    cp $f '/etc/kubernetes/pki.bak_%[1]s/'$f
-done`, backupDir, certDir)
+cp -r %[2]s/* '/etc/kubernetes/pki.bak_%[1]s/'
+rm -rf '/etc/kubernetes/pki.bak_%[1]s/etcd'`, backupDir, certDir)
 	} else {
 		script = fmt.Sprintf("cp -r '%s' '/etc/kubernetes/pki.bak_%s'", certDir, backupDir)
 	}

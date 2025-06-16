@@ -45,17 +45,18 @@ func NewRenewer(kube kubernetes.Client, sshRunner SSHRunner, osRenewer OSRenewer
 
 // RenewCertificates orchestrates the certificate renewal process for the specified component.
 func (r *Renewer) RenewCertificates(ctx context.Context, cfg *RenewalConfig, component string) error {
-	if err := r.validateRenewalConfig(cfg, component); err != nil {
+	processEtcd, processControlPlane, err := r.validateRenewalConfig(cfg, component)
+	if err != nil {
 		return err
 	}
 
-	if ShouldProcessComponent(component, constants.EtcdComponent) && len(cfg.Etcd.Nodes) > 0 {
+	if processEtcd {
 		if err := r.renewEtcdCerts(ctx, cfg); err != nil {
 			return err
 		}
 	}
 
-	if ShouldProcessComponent(component, constants.ControlPlaneComponent) {
+	if processControlPlane {
 		if err := r.renewControlPlaneCerts(ctx, cfg, component); err != nil {
 			return err
 		}
@@ -172,23 +173,24 @@ func (r *Renewer) cleanup() error {
 	return os.RemoveAll(r.backupDir)
 }
 
-func (r *Renewer) validateRenewalConfig(cfg *RenewalConfig, component string) error {
-	if ShouldProcessComponent(component, constants.EtcdComponent) && len(cfg.Etcd.Nodes) > 0 {
+func (r *Renewer) validateRenewalConfig(cfg *RenewalConfig, component string) (processEtcd, processControlPlane bool, err error) {
+	processEtcd = ShouldProcessComponent(component, constants.EtcdComponent) && len(cfg.Etcd.Nodes) > 0
+	processControlPlane = ShouldProcessComponent(component, constants.ControlPlaneComponent)
+
+	if processEtcd {
 		if err := ValidateNodesPresence(cfg.Etcd.Nodes, constants.EtcdComponent); err != nil {
-			logger.Info(err.Error())
-			return nil
+			return false, false, fmt.Errorf("validating etcd nodes: %v", err)
 		}
-
 		if err := r.ssh.InitSSHConfig(cfg.Etcd.SSH); err != nil {
-			return fmt.Errorf("initializing SSH config for etcd: %v", err)
+			return false, false, fmt.Errorf("initializing SSH config for etcd: %v", err)
 		}
 	}
 
-	if ShouldProcessComponent(component, constants.ControlPlaneComponent) {
+	if processControlPlane {
 		if err := r.ssh.InitSSHConfig(cfg.ControlPlane.SSH); err != nil {
-			return fmt.Errorf("initializing SSH config for control-plane: %v", err)
+			return false, false, fmt.Errorf("initializing SSH config for control-plane: %v", err)
 		}
 	}
 
-	return nil
+	return processEtcd, processControlPlane, nil
 }

@@ -50,17 +50,46 @@ func (r *DockerSSHRunner) InitSSHConfig(cfg SSHConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	sshPassword := cfg.Password
+	if sshPassword == "" {
+
+		componentType := "CP"
+		if strings.Contains(strings.ToLower(cfg.KeyPath), "etcd") {
+			componentType = "ETCD"
+		}
+
+		componentEnvVar := "EKSA_SSH_KEY_PASSPHRASE_" + componentType
+
+		generalEksaEnvVar := "EKSA_SSH_KEY_PASSPHRASE"
+
+		if envPassword := os.Getenv(componentEnvVar); envPassword != "" {
+			sshPassword = envPassword
+		} else if envPassword := os.Getenv(generalEksaEnvVar); envPassword != "" {
+			sshPassword = envPassword
+		}
+	}
+
 	const sentinel = "/tmp/agent_ready"
 	agentReady := exec.CommandContext(ctx, "docker", "exec", r.containerName, "test", "-f", sentinel).Run() == nil
 
+	var sshAddCmd string
+	if sshPassword != "" {
+		sshAddCmd = fmt.Sprintf("echo '%s' | ssh-add %s", sshPassword, r.sshConfig.KeyPath)
+	} else {
+		sshAddCmd = fmt.Sprintf("ssh-add %s", r.sshConfig.KeyPath)
+	}
+
 	var dockerCmd []string
 	if agentReady {
-		dockerCmd = []string{"exec", "-i", r.containerName, "ssh-add", r.sshConfig.KeyPath}
+		dockerCmd = []string{
+			"exec", "-i", r.containerName,
+			"bash", "-c", sshAddCmd,
+		}
 	} else {
 		dockerCmd = []string{
 			"exec", "-i", r.containerName,
 			"bash", "-c",
-			fmt.Sprintf(`eval $(ssh-agent) && ssh-add %s && touch %s`, r.sshConfig.KeyPath, sentinel),
+			fmt.Sprintf(`eval $(ssh-agent) && %s && touch %s`, sshAddCmd, sentinel),
 		}
 	}
 
