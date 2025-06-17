@@ -10,7 +10,6 @@ import (
 	"github.com/aws/eks-anywhere/pkg/certificates"
 	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/dependencies"
-	"github.com/aws/eks-anywhere/pkg/executables"
 	"github.com/aws/eks-anywhere/pkg/kubeconfig"
 	"github.com/aws/eks-anywhere/pkg/logger"
 )
@@ -56,19 +55,8 @@ func newRenewerForCmd(ctx context.Context, cfg *certificates.RenewalConfig) (*ce
 		return nil, err
 	}
 
-	if !executables.ExecutablesInDocker() {
-		return nil, fmt.Errorf("certificate renewal operations must be run in a container; please do not set MR_TOOLS_DISABLE=true")
-	}
-
-	sshRunner, err := certificates.NewDockerSSHRunner(
-		deps.ExecutableBuilder.ContainerName(),
-		cfg.ControlPlane.SSH,
-	)
+	sshRunner, err := certificates.NewSSHRunner(cfg.ControlPlane.SSH)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := certificates.PreloadAllSSHKeys(sshRunner, cfg); err != nil {
 		return nil, err
 	}
 

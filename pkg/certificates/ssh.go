@@ -43,12 +43,26 @@ type DefaultSSHRunner struct {
 }
 
 // NewSSHRunner creates a new DefaultSSHRunner.
-func NewSSHRunner() *DefaultSSHRunner {
-	return &DefaultSSHRunner{
+//
+//	func NewSSHRunner() *DefaultSSHRunner {
+//		return &DefaultSSHRunner{
+//			sshDialer: func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
+//				return ssh.Dial(network, addr, config)
+//			},
+//		}
+//	}
+func NewSSHRunner(cfg SSHConfig) (*DefaultSSHRunner, error) {
+	r := &DefaultSSHRunner{
 		sshDialer: func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
 			return ssh.Dial(network, addr, config)
 		},
 	}
+
+	if err := r.InitSSHConfig(cfg); err != nil {
+		return nil, err
+	}
+
+	return r, nil
 }
 
 // InitSSHConfig initializes the SSH configuration.
