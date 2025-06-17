@@ -1,16 +1,21 @@
 clusterName: junecao-bottlerocket
+os: bottlerocket 
 controlPlane: 
     nodes: 
     - 195.17.180.67
     - 195.17.175.21
-    os: bottlerocket
-    sshKey: /Users/junecao/.ssh/id_ed25519_eks
-    sshUser: ec2-user
+    # os: bottlerocket
+    ssh:
+        sshKey: /Users/junecao/.ssh/id_ed25519_eks
+        sshPasswd: test123456
+        sshUser: ec2-user
 etcd: 
     nodes: 
     - 195.17.180.65
     - 195.17.180.66
     - 195.17.90.34 
-    os: bottlerocket 
-    sshKey: /Users/junecao/.ssh/id_ed25519_eks
-    sshUser: ec2-user
+    # os: bottlerocket 
+    ssh:
+        sshKey: /Users/junecao/.ssh/id_ed25519_eks
+        sshPasswd: test123456
+        sshUser: ec2-user

@@ -2,15 +2,16 @@ package certificates
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/aws/eks-anywhere/pkg/clients/kubernetes"
 	"github.com/aws/eks-anywhere/pkg/constants"
@@ -98,97 +99,54 @@ func (r *Renewer) renewControlPlaneCerts(ctx context.Context, cfg *RenewalConfig
 	return nil
 }
 
-// func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterName string) error {
-// 	logger.MarkPass("Updating apiserver-etcd-client secret", "cluster", clusterName)
-// 	if err := r.ensureNamespaceExists(ctx, constants.EksaSystemNamespace); err != nil {
-// 		return err
-// 	}
-
-// 	crtPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
-// 	keyPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
-// 	crtData, err := os.ReadFile(crtPath)
-// 	if err != nil {
-// 		return fmt.Errorf("read certificate file: %v", err)
-// 	}
-// 	keyData, err := os.ReadFile(keyPath)
-// 	if err != nil {
-// 		return fmt.Errorf("read key file: %v", err)
-// 	}
-
-// 	secretName := fmt.Sprintf("%s-apiserver-etcd-client", clusterName)
-// 	secret := &corev1.Secret{}
-// 	err = r.kube.Get(ctx, secretName, constants.EksaSystemNamespace, secret)
-// 	if err != nil {
-// 		if !apierrors.IsNotFound(err) {
-// 			return fmt.Errorf("get secret %s: %v", secretName, err)
-// 		}
-
-// 		newSecret := &corev1.Secret{
-// 			ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: constants.EksaSystemNamespace},
-// 			Type:       corev1.SecretTypeTLS,
-// 			Data:       map[string][]byte{"tls.crt": crtData, "tls.key": keyData},
-// 		}
-// 		if err = r.kube.Create(ctx, newSecret); err != nil {
-// 			return fmt.Errorf("create secret %s: %v", secretName, err)
-// 		}
-// 	} else {
-// 		if secret.Data == nil {
-// 			secret.Data = make(map[string][]byte)
-// 		}
-// 		// secret.Type = corev1.SecretTypeTLS
-// 		secret.Data["tls.crt"] = crtData
-// 		secret.Data["tls.key"] = keyData
-// 		if err = r.kube.Update(ctx, secret); err != nil {
-// 			return fmt.Errorf("update secret %s: %v", secretName, err)
-// 		}
-// 	}
-// 	logger.V(2).Info("Successfully updated secret", "name", secretName)
-// 	return nil
-// }
-
 func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterName string) error {
 	logger.MarkPass("Updating apiserver-etcd-client secret", "cluster", clusterName)
+
 	// if err := r.ensureNamespaceExists(ctx, constants.EksaSystemNamespace); err != nil {
-	// 	return err
+	// 	return fmt.Errorf("ensuring eksa-system namespace exists: %v", err)
 	// }
 
 	crtPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
 	keyPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
+
 	crtData, err := os.ReadFile(crtPath)
 	if err != nil {
-		return fmt.Errorf("read certificate file: %v", err)
+		return fmt.Errorf("failed to read certificate file: %v", err)
 	}
 	keyData, err := os.ReadFile(keyPath)
 	if err != nil {
-		return fmt.Errorf("read key file: %v", err)
+		return fmt.Errorf("failed to read key file: %v", err)
 	}
+
+	crtBase64 := base64.StdEncoding.EncodeToString(crtData)
+	keyBase64 := base64.StdEncoding.EncodeToString(keyData)
 
 	secretName := fmt.Sprintf("%s-apiserver-etcd-client", clusterName)
-	secret := &corev1.Secret{}
-	err = r.kube.Get(ctx, secretName, constants.EksaSystemNamespace, secret)
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("get secret %s: %v", secretName, err)
-		}
 
-		newSecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: constants.EksaSystemNamespace},
-			Type:       corev1.SecretTypeTLS,
-			Data:       map[string][]byte{"tls.crt": crtData, "tls.key": keyData},
-		}
-		if err = r.kube.Create(ctx, newSecret); err != nil {
-			return fmt.Errorf("create secret %s: %v", secretName, err)
-		}
-	} else {
-		if secret.Data == nil {
-			secret.Data = make(map[string][]byte)
-		}
-		secret.Data["tls.crt"] = crtData
-		secret.Data["tls.key"] = keyData
-		if err = r.kube.Update(ctx, secret); err != nil {
-			return fmt.Errorf("update secret %s: %v", secretName, err)
+	patchData := fmt.Sprintf(`{"data":{"tls.crt":"%s","tls.key":"%s"}}`, crtBase64, keyBase64)
+
+	cmd := exec.Command("kubectl", "patch", "secret", secretName,
+		"-n", constants.EksaSystemNamespace,
+		"--type=merge",
+		"-p", patchData)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "NotFound") {
+			createCmd := exec.Command("kubectl", "create", "secret", "tls",
+				secretName,
+				"-n", constants.EksaSystemNamespace,
+				"--cert", crtPath,
+				"--key", keyPath)
+
+			if output, err := createCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to create secret %s: %v, output: %s", secretName, err, string(output))
+			}
+		} else {
+			return fmt.Errorf("failed to update secret %s: %v, output: %s", secretName, err, string(output))
 		}
 	}
+
 	logger.V(2).Info("Successfully updated secret", "name", secretName)
 	return nil
 }

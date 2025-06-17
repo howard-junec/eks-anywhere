@@ -181,29 +181,35 @@ func PreloadAllSSHKeys(r SSHRunner, cfg *RenewalConfig) error {
 func ResolveKubeconfigPath(clusterName string) (string, error) {
 	var kubeconfigPath string
 
+	if clusterName != "" {
+		pwd, err := os.Getwd()
+		if err == nil {
+			possiblePath := filepath.Join(pwd, clusterName, fmt.Sprintf("%s-eks-a-cluster.kubeconfig", clusterName))
+			logger.Info("Trying kubeconfig path based on clusterName", "possiblePath", possiblePath)
+			if _, err := os.Stat(possiblePath); err == nil {
+				kubeconfigPath = possiblePath
+				logger.Info("Using kubeconfig from cluster directory", "path", kubeconfigPath)
+				return kubeconfigPath, nil
+			}
+		}
+	}
+
 	envPath := os.Getenv("KUBECONFIG")
 	if envPath != "" {
 		kubeconfigPath = envPath
-	} else {
-		if clusterName != "" {
-			pwd, err := os.Getwd()
-			if err == nil {
-				possiblePath := filepath.Join(pwd, clusterName, fmt.Sprintf("%s-eks-a-cluster.kubeconfig", clusterName))
-				if _, err := os.Stat(possiblePath); err == nil {
-					kubeconfigPath = possiblePath
-					logger.Info("Using kubeconfig from cluster directory", "path", kubeconfigPath)
-				}
-			}
-		}
-		if kubeconfigPath == "" {
-			return "", fmt.Errorf("no kubeconfig specified and KUBECONFIG environment variable is not set. " +
-				"Try setting KUBECONFIG environment variable: export KUBECONFIG=${PWD}/${CLUSTER_NAME}/${CLUSTER_NAME}-eks-a-cluster.kubeconfig")
-		}
+		logger.Info("Using kubeconfig from environment variable", "path", kubeconfigPath)
+	}
+
+	if kubeconfigPath == "" {
+		return "", fmt.Errorf("could not find kubeconfig for cluster %s and KUBECONFIG environment variable is not set. "+
+			"Try setting KUBECONFIG environment variable: export KUBECONFIG=${PWD}/${CLUSTER_NAME}/${CLUSTER_NAME}-eks-a-cluster.kubeconfig",
+			clusterName)
 	}
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return "", fmt.Errorf("kubeconfig file does not exist: %s", kubeconfigPath)
 	}
 
+	logger.Info("Using kubeconfig from cluster directory", "path", kubeconfigPath)
 	return kubeconfigPath, nil
 }
