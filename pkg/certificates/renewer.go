@@ -10,9 +10,6 @@ import (
 	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-
 	"github.com/aws/eks-anywhere/pkg/clients/kubernetes"
 	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/logger"
@@ -51,13 +48,13 @@ func (r *Renewer) RenewCertificates(ctx context.Context, cfg *RenewalConfig, com
 		return err
 	}
 
-	// if err := r.checkAPIServerReachability(ctx); err != nil {
-	// 	logger.MarkWarning("API server unreachable, proceeding with caution", "error", err)
-	// }
+	if err := r.checkAPIServerReachability(ctx); err != nil {
+		logger.MarkWarning("API server unreachable, proceeding with caution", "error", err)
+	}
 
-	// if err := r.backupKubeadmConfig(ctx); err != nil {
-	// 	logger.V(2).Info("kubeadm-config backup completed with status", "error", err)
-	// }
+	if err := r.backupKubeadmConfig(ctx); err != nil {
+		logger.V(2).Info("kubeadm-config backup completed with status", "error", err)
+	}
 
 	if processEtcd {
 		if err := r.renewEtcdCerts(ctx, cfg); err != nil {
@@ -144,6 +141,7 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 			createCmd := exec.Command("kubectl", "create", "secret", "tls",
 				secretName,
 				"-n", constants.EksaSystemNamespace,
+				"--insecure-skip-tls-verify=true",
 				"--cert", crtPath,
 				"--key", keyPath)
 
@@ -155,20 +153,87 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 		}
 	}
 
-	logger.V(2).Info("Successfully updated secret", "name", secretName)
+	// logger.V(2).Info("Successfully updated secret", "name", secretName)
+	logger.Info("Successfully updated secret", "name", secretName)
 	return nil
 }
 
+// func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterName string) error {
+// 	logger.MarkPass("Updating apiserver-etcd-client secret", "cluster", clusterName)
+
+// 	if err := r.ensureNamespaceExists(ctx, constants.EksaSystemNamespace); err != nil {
+// 		return fmt.Errorf("ensuring eksa-system namespace exists: %v", err)
+// 	}
+
+// 	crtPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
+// 	keyPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
+
+// 	crtData, err := os.ReadFile(crtPath)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to read certificate file: %v", err)
+// 	}
+// 	keyData, err := os.ReadFile(keyPath)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to read key file: %v", err)
+// 	}
+
+// 	secretName := fmt.Sprintf("%s-apiserver-etcd-client", clusterName)
+// 	secret := &corev1.Secret{
+// 		ObjectMeta: metav1.ObjectMeta{
+// 			Name:      secretName,
+// 			Namespace: constants.EksaSystemNamespace,
+// 		},
+// 		Type: corev1.SecretTypeTLS,
+// 		Data: map[string][]byte{
+// 			"tls.crt": crtData,
+// 			"tls.key": keyData,
+// 		},
+// 	}
+
+// 	existingSecret := &corev1.Secret{}
+// 	err = r.kube.Get(ctx, secretName, constants.EksaSystemNamespace, existingSecret)
+// 	if err != nil {
+// 		if apierrors.IsNotFound(err) {
+// 			if err = r.kube.Create(ctx, secret); err != nil {
+// 				return fmt.Errorf("failed to create secret %s: %v", secretName, err)
+// 			}
+// 			logger.V(2).Info("Successfully created secret", "name", secretName)
+// 		} else {
+// 			return fmt.Errorf("failed to get secret %s: %v", secretName, err)
+// 		}
+// 	} else {
+// 		existingSecret.Data = secret.Data
+// 		if err = r.kube.Update(ctx, existingSecret); err != nil {
+// 			return fmt.Errorf("failed to update secret %s: %v", secretName, err)
+// 		}
+// 		logger.V(2).Info("Successfully updated secret", "name", secretName)
+// 	}
+
+// 	return nil
+// }
+
+// func (r *Renewer) ensureNamespaceExists(ctx context.Context, namespace string) error {
+// 	ns := &corev1.Namespace{}
+// 	err := r.kube.Get(ctx, namespace, "", ns)
+// 	if err != nil {
+// 		if !apierrors.IsNotFound(err) {
+// 			return fmt.Errorf("checking namespace %s: %v", namespace, err)
+// 		}
+// 		ns.Name = namespace
+// 		if err = r.kube.Create(ctx, ns); err != nil {
+// 			return fmt.Errorf("create namespace %s: %v", namespace, err)
+// 		}
+// 		logger.Info("Created namespace", "name", namespace)
+// 	}
+// 	return nil
+// }
+
 func (r *Renewer) ensureNamespaceExists(ctx context.Context, namespace string) error {
-	ns := &corev1.Namespace{}
-	err := r.kube.Get(ctx, namespace, "", ns)
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("checking namespace %s: %v", namespace, err)
-		}
-		ns.Name = namespace
-		if err = r.kube.Create(ctx, ns); err != nil {
-			return fmt.Errorf("create namespace %s: %v", namespace, err)
+	nsCmd := exec.Command("kubectl", "get", "namespace", namespace)
+	if err := nsCmd.Run(); err != nil {
+		createNsCmd := exec.Command("kubectl", "create", "namespace", namespace)
+		if output, err := createNsCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to create namespace %s: %v, output: %s", namespace, err, string(output))
 		}
 		logger.Info("Created namespace", "name", namespace)
 	}
@@ -208,7 +273,7 @@ func (r *Renewer) validateRenewalConfig(cfg *RenewalConfig, component string) (p
 	return processEtcd, processControlPlane, nil
 }
 
-func (r *Renewer) checkAPIServerReachability(ctx context.Context) error {
+func (r *Renewer) checkAPIServerReachability(_ context.Context) error {
 	logger.Info("Checking if Kubernetes API server is reachable...")
 
 	for i := 0; i < 5; i++ {
