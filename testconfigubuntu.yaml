@@ -5,7 +5,6 @@ controlPlane:
     - 195.17.180.62 
     - 195.17.160.181
     - 195.17.180.63 
-    # os: ubuntu
-    # sshKey: ~/.ssh/id_ed25519_eks
-    sshKey: /Users/junecao/.ssh/id_ed25519_eks
-    sshUser: ubuntu
+    ssh:
+        sshKey: /Users/junecao/.ssh/id_ed25519_eks
+        sshUser: ubuntu
