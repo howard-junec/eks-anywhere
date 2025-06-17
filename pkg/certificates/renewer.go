@@ -51,6 +51,14 @@ func (r *Renewer) RenewCertificates(ctx context.Context, cfg *RenewalConfig, com
 		return err
 	}
 
+	// if err := r.checkAPIServerReachability(ctx); err != nil {
+	// 	logger.MarkWarning("API server unreachable, proceeding with caution", "error", err)
+	// }
+
+	// if err := r.backupKubeadmConfig(ctx); err != nil {
+	// 	logger.V(2).Info("kubeadm-config backup completed with status", "error", err)
+	// }
+
 	if processEtcd {
 		if err := r.renewEtcdCerts(ctx, cfg); err != nil {
 			return err
@@ -198,4 +206,50 @@ func (r *Renewer) validateRenewalConfig(cfg *RenewalConfig, component string) (p
 	}
 
 	return processEtcd, processControlPlane, nil
+}
+
+func (r *Renewer) checkAPIServerReachability(ctx context.Context) error {
+	logger.Info("Checking if Kubernetes API server is reachable...")
+
+	for i := 0; i < 5; i++ {
+		cmd := exec.Command("kubectl", "version", "--request-timeout=2m")
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+
+		if err := cmd.Run(); err == nil {
+			logger.Info("✅ API server is reachable")
+			return nil
+		}
+
+		logger.V(2).Info("API server not reachable, retrying...", "attempt", i+1)
+		time.Sleep(10 * time.Second)
+	}
+
+	return fmt.Errorf("❌ Error: Kubernetes API server is not reachable")
+}
+
+func (r *Renewer) backupKubeadmConfig(ctx context.Context) error {
+	logger.Info("Attempting to backup kubeadm-config ConfigMap...")
+
+	if err := os.MkdirAll(r.backupDir, 0o755); err != nil {
+		logger.MarkWarning("Failed to create backup directory", "error", err)
+		return nil
+	}
+
+	backupPath := filepath.Join(r.backupDir, "kubeadm-config.yaml")
+
+	cmd := exec.CommandContext(ctx, "kubectl", "-n", "kube-system", "get", "cm", "kubeadm-config", "-o", "yaml")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.MarkWarning("Could not backup kubeadm-config, continuing without backup", "error", err)
+		return nil
+	}
+
+	if err := os.WriteFile(backupPath, output, 0o600); err != nil {
+		logger.MarkWarning("Failed to write backup file", "error", err)
+		return nil
+	}
+
+	logger.Info("kubeadm-config backed up successfully", "path", backupPath)
+	return nil
 }
