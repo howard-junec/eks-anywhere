@@ -75,7 +75,9 @@ func (r *Renewer) renewEtcdCerts(ctx context.Context, cfg *RenewalConfig) error 
 	}
 
 	if err := r.updateAPIServerEtcdClientSecret(ctx, cfg.ClusterName); err != nil {
-		return err
+		logger.MarkWarning("Failed to update apiserver-etcd-client secret: %v", err)
+		logger.Info("You may need to manually update the secret after the API server is reachable")
+		logger.Info("Use: kubectl edit secret %s-apiserver-etcd-client -n eksa-system", cfg.ClusterName)
 	}
 
 	logger.MarkSuccess("Etcd certificate renewal process completed successfully.")
@@ -94,6 +96,54 @@ func (r *Renewer) renewControlPlaneCerts(ctx context.Context, cfg *RenewalConfig
 	logger.MarkSuccess("Control plane certificate renewal process completed successfully.")
 	return nil
 }
+
+// func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterName string) error {
+// 	logger.MarkPass("Updating apiserver-etcd-client secret", "cluster", clusterName)
+// 	if err := r.ensureNamespaceExists(ctx, constants.EksaSystemNamespace); err != nil {
+// 		return err
+// 	}
+
+// 	crtPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
+// 	keyPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
+// 	crtData, err := os.ReadFile(crtPath)
+// 	if err != nil {
+// 		return fmt.Errorf("read certificate file: %v", err)
+// 	}
+// 	keyData, err := os.ReadFile(keyPath)
+// 	if err != nil {
+// 		return fmt.Errorf("read key file: %v", err)
+// 	}
+
+// 	secretName := fmt.Sprintf("%s-apiserver-etcd-client", clusterName)
+// 	secret := &corev1.Secret{}
+// 	err = r.kube.Get(ctx, secretName, constants.EksaSystemNamespace, secret)
+// 	if err != nil {
+// 		if !apierrors.IsNotFound(err) {
+// 			return fmt.Errorf("get secret %s: %v", secretName, err)
+// 		}
+
+// 		newSecret := &corev1.Secret{
+// 			ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: constants.EksaSystemNamespace},
+// 			Type:       corev1.SecretTypeTLS,
+// 			Data:       map[string][]byte{"tls.crt": crtData, "tls.key": keyData},
+// 		}
+// 		if err = r.kube.Create(ctx, newSecret); err != nil {
+// 			return fmt.Errorf("create secret %s: %v", secretName, err)
+// 		}
+// 	} else {
+// 		if secret.Data == nil {
+// 			secret.Data = make(map[string][]byte)
+// 		}
+// 		// secret.Type = corev1.SecretTypeTLS
+// 		secret.Data["tls.crt"] = crtData
+// 		secret.Data["tls.key"] = keyData
+// 		if err = r.kube.Update(ctx, secret); err != nil {
+// 			return fmt.Errorf("update secret %s: %v", secretName, err)
+// 		}
+// 	}
+// 	logger.V(2).Info("Successfully updated secret", "name", secretName)
+// 	return nil
+// }
 
 func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterName string) error {
 	logger.MarkPass("Updating apiserver-etcd-client secret", "cluster", clusterName)
@@ -132,7 +182,6 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 		if secret.Data == nil {
 			secret.Data = make(map[string][]byte)
 		}
-		secret.Type = corev1.SecretTypeTLS
 		secret.Data["tls.crt"] = crtData
 		secret.Data["tls.key"] = keyData
 		if err = r.kube.Update(ctx, secret); err != nil {

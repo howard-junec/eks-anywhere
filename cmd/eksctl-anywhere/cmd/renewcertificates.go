@@ -10,7 +10,6 @@ import (
 	"github.com/aws/eks-anywhere/pkg/certificates"
 	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/dependencies"
-	"github.com/aws/eks-anywhere/pkg/kubeconfig"
 	"github.com/aws/eks-anywhere/pkg/logger"
 )
 
@@ -60,7 +59,13 @@ func newRenewerForCmd(ctx context.Context, cfg *certificates.RenewalConfig) (*ce
 		return nil, err
 	}
 
-	kubeCfgPath := kubeconfig.FromClusterName(cfg.ClusterName)
+	// kubeCfgPath := kubeconfig.FromClusterName(cfg.ClusterName)
+
+	kubeCfgPath, err := certificates.ResolveKubeconfigPath(cfg.ClusterName)
+	if err != nil {
+		return nil, err
+	}
+
 	kubeClient := deps.UnAuthKubeClient.KubeconfigClient(kubeCfgPath)
 
 	osKey := cfg.OS

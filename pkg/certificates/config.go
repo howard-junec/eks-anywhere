@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/constants"
+	"github.com/aws/eks-anywhere/pkg/logger"
 )
 
 // VerbosityLevel controls the detail level of logging output.
@@ -174,4 +175,35 @@ func PreloadAllSSHKeys(r SSHRunner, cfg *RenewalConfig) error {
 		}
 	}
 	return nil
+}
+
+// ResolveKubeconfigPath attempts to find a valid kubeconfig file for the given cluster name.
+func ResolveKubeconfigPath(clusterName string) (string, error) {
+	var kubeconfigPath string
+
+	envPath := os.Getenv("KUBECONFIG")
+	if envPath != "" {
+		kubeconfigPath = envPath
+	} else {
+		if clusterName != "" {
+			pwd, err := os.Getwd()
+			if err == nil {
+				possiblePath := filepath.Join(pwd, clusterName, fmt.Sprintf("%s-eks-a-cluster.kubeconfig", clusterName))
+				if _, err := os.Stat(possiblePath); err == nil {
+					kubeconfigPath = possiblePath
+					logger.Info("Using kubeconfig from cluster directory", "path", kubeconfigPath)
+				}
+			}
+		}
+		if kubeconfigPath == "" {
+			return "", fmt.Errorf("no kubeconfig specified and KUBECONFIG environment variable is not set. " +
+				"Try setting KUBECONFIG environment variable: export KUBECONFIG=${PWD}/${CLUSTER_NAME}/${CLUSTER_NAME}-eks-a-cluster.kubeconfig")
+		}
+	}
+
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("kubeconfig file does not exist: %s", kubeconfigPath)
+	}
+
+	return kubeconfigPath, nil
 }
