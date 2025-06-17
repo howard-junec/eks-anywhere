@@ -75,9 +75,10 @@ func (r *Renewer) renewEtcdCerts(ctx context.Context, cfg *RenewalConfig) error 
 	}
 
 	if err := r.updateAPIServerEtcdClientSecret(ctx, cfg.ClusterName); err != nil {
-		logger.MarkWarning("Failed to update apiserver-etcd-client secret: %v", err)
+		logger.MarkWarning("Failed to update apiserver-etcd-client secret", "error", err)
 		logger.Info("You may need to manually update the secret after the API server is reachable")
-		logger.Info("Use: kubectl edit secret %s-apiserver-etcd-client -n eksa-system", cfg.ClusterName)
+		logger.Info("Use kubectl edit secret to update the secret", "command", fmt.Sprintf("kubectl edit secret %s-apiserver-etcd-client -n eksa-system", cfg.ClusterName))
+
 	}
 
 	logger.MarkSuccess("Etcd certificate renewal process completed successfully.")
@@ -147,9 +148,9 @@ func (r *Renewer) renewControlPlaneCerts(ctx context.Context, cfg *RenewalConfig
 
 func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterName string) error {
 	logger.MarkPass("Updating apiserver-etcd-client secret", "cluster", clusterName)
-	if err := r.ensureNamespaceExists(ctx, constants.EksaSystemNamespace); err != nil {
-		return err
-	}
+	// if err := r.ensureNamespaceExists(ctx, constants.EksaSystemNamespace); err != nil {
+	// 	return err
+	// }
 
 	crtPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
 	keyPath := filepath.Join(r.backupDir, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
