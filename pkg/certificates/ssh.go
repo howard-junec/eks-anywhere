@@ -31,7 +31,6 @@ type SSHRunner interface {
 	RunCommandWithOutput(ctx context.Context, node string, cmds []string) (string, error)
 	// InitSSHConfig initializes the SSH configuration
 	InitSSHConfig(sshConfig SSHConfig) error
-	DownloadFile(ctx context.Context, node, remote, local string) error
 }
 
 // DefaultSSHRunner is the default implementation of SSHRunner.
@@ -124,8 +123,16 @@ func (r *DefaultSSHRunner) RunCommand(ctx context.Context, node string, cmds []s
 	}
 	defer client.Close()
 
-	// cmdStr := strings.Join(cmds, " && ")
-	cmdStr := strings.Join(cmds, " ")
+	var cmdStr string
+	if len(cmds) >= 3 && cmds[0] == "sudo" && cmds[1] == "sh" && cmds[2] == "-c" {
+		if len(cmds) == 4 {
+			cmdStr = fmt.Sprintf("%s %s %s '%s'", cmds[0], cmds[1], cmds[2], cmds[3])
+		} else {
+			cmdStr = strings.Join(cmds, " ")
+		}
+	} else {
+		cmdStr = strings.Join(cmds, " ")
+	}
 
 	done := make(chan error, 1)
 	go func() {
@@ -186,8 +193,16 @@ func (r *DefaultSSHRunner) RunCommandWithOutput(ctx context.Context, node string
 	}
 	defer client.Close()
 
-	// cmdStr := strings.Join(cmds, " && ")
-	cmdStr := strings.Join(cmds, " ")
+	var cmdStr string
+	if len(cmds) >= 3 && cmds[0] == "sudo" && cmds[1] == "sh" && cmds[2] == "-c" {
+		if len(cmds) == 4 {
+			cmdStr = fmt.Sprintf("%s %s %s '%s'", cmds[0], cmds[1], cmds[2], cmds[3])
+		} else {
+			cmdStr = strings.Join(cmds, " ")
+		}
+	} else {
+		cmdStr = strings.Join(cmds, " ")
+	}
 
 	type result struct {
 		output string
@@ -224,13 +239,4 @@ func (r *DefaultSSHRunner) RunCommandWithOutput(ctx context.Context, node string
 	case res := <-done:
 		return res.output, res.err
 	}
-}
-
-// DownloadFile copies a remote file to the local host via an SSH cat pipe.
-func (r *DefaultSSHRunner) DownloadFile(ctx context.Context, node, remote, local string) error {
-	output, err := r.RunCommandWithOutput(ctx, node, []string{fmt.Sprintf("sudo cat %s", remote)})
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(local, []byte(output), 0o600)
 }
