@@ -43,7 +43,6 @@ func init() {
 
 // newRenewerForCmd builds dependencies & returns a ready to-use Renewer.
 func newRenewerForCmd(ctx context.Context, cfg *certificates.RenewalConfig) (*certificates.Renewer, error) {
-
 	deps, err := dependencies.NewFactory().
 		WithExecutableBuilder().
 		WithKubectl().

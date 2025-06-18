@@ -28,7 +28,6 @@ type Renewer struct {
 }
 
 // NewRenewer creates a new certificate renewer instance with a timestamped backup directory.
-// func NewRenewer(kube kubernetes.Client, sshRunner SSHRunner, osRenewer OSRenewer) (*Renewer, error) {
 func NewRenewer(kube kubernetes.Client, osRenewer OSRenewer) (*Renewer, error) {
 	ts := time.Now().Format("20060102_150405")
 	backupDir := "certificate_backup_" + ts
@@ -146,17 +145,17 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 			return nil
 		}
 		return fmt.Errorf("get secret %s: %v", secretName, err)
-	} else {
-		if secret.Data == nil {
-			secret.Data = make(map[string][]byte)
-		}
-		secret.Type = corev1.SecretTypeTLS
-		secret.Data["tls.crt"] = crtData
-		secret.Data["tls.key"] = keyData
-		if err = r.kube.Update(ctx, secret); err != nil {
-			return fmt.Errorf("update secret %s: %v", secretName, err)
-		}
 	}
+	if secret.Data == nil {
+		secret.Data = make(map[string][]byte)
+	}
+	secret.Type = corev1.SecretTypeTLS
+	secret.Data["tls.crt"] = crtData
+	secret.Data["tls.key"] = keyData
+	if err = r.kube.Update(ctx, secret); err != nil {
+		return fmt.Errorf("update secret %s: %v", secretName, err)
+	}
+
 	logger.V(2).Info("Successfully updated secret", "name", secretName)
 	return nil
 }
@@ -196,7 +195,6 @@ func (r *Renewer) validateRenewalConfig(
 	cfg *RenewalConfig,
 	component string,
 ) (processEtcd, processControlPlane bool, err error) {
-
 	processEtcd = ShouldProcessComponent(component, constants.EtcdComponent) &&
 		len(cfg.Etcd.Nodes) > 0
 	processControlPlane = ShouldProcessComponent(component, constants.ControlPlaneComponent)

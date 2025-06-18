@@ -41,6 +41,7 @@ type DefaultSSHRunner struct {
 	sshPasswd  string
 }
 
+// NewSSHRunner creates a new SSH runner with the given configuration.
 func NewSSHRunner(cfg SSHConfig) (*DefaultSSHRunner, error) {
 	r := &DefaultSSHRunner{
 		sshDialer: func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
@@ -123,16 +124,7 @@ func (r *DefaultSSHRunner) RunCommand(ctx context.Context, node string, cmds []s
 	}
 	defer client.Close()
 
-	var cmdStr string
-	if len(cmds) >= 3 && cmds[0] == "sudo" && cmds[1] == "sh" && cmds[2] == "-c" {
-		if len(cmds) == 4 {
-			cmdStr = fmt.Sprintf("%s %s %s '%s'", cmds[0], cmds[1], cmds[2], cmds[3])
-		} else {
-			cmdStr = strings.Join(cmds, " ")
-		}
-	} else {
-		cmdStr = strings.Join(cmds, " ")
-	}
+	cmdStr := r.buildCommandString(cmds)
 
 	done := make(chan error, 1)
 	go func() {
@@ -193,16 +185,7 @@ func (r *DefaultSSHRunner) RunCommandWithOutput(ctx context.Context, node string
 	}
 	defer client.Close()
 
-	var cmdStr string
-	if len(cmds) >= 3 && cmds[0] == "sudo" && cmds[1] == "sh" && cmds[2] == "-c" {
-		if len(cmds) == 4 {
-			cmdStr = fmt.Sprintf("%s %s %s '%s'", cmds[0], cmds[1], cmds[2], cmds[3])
-		} else {
-			cmdStr = strings.Join(cmds, " ")
-		}
-	} else {
-		cmdStr = strings.Join(cmds, " ")
-	}
+	cmdStr := r.buildCommandString(cmds)
 
 	type result struct {
 		output string
@@ -239,4 +222,13 @@ func (r *DefaultSSHRunner) RunCommandWithOutput(ctx context.Context, node string
 	case res := <-done:
 		return res.output, res.err
 	}
+}
+
+func (r *DefaultSSHRunner) buildCommandString(cmds []string) string {
+	if len(cmds) >= 3 && cmds[0] == "sudo" && cmds[1] == "sh" && cmds[2] == "-c" {
+		if len(cmds) == 4 {
+			return fmt.Sprintf("%s %s %s '%s'", cmds[0], cmds[1], cmds[2], cmds[3])
+		}
+	}
+	return strings.Join(cmds, " ")
 }

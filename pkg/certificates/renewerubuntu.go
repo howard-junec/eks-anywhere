@@ -25,6 +25,7 @@ type LinuxRenewer struct {
 // NewLinuxRenewer creates a new renewer for Linux-based operating systems.
 func NewLinuxRenewer() *LinuxRenewer { return &LinuxRenewer{osType: OSTypeLinux} }
 
+// RenewControlPlaneCerts renews certificates for control plane nodes.
 func (l *LinuxRenewer) RenewControlPlaneCerts(
 	ctx context.Context,
 	node string,
@@ -54,6 +55,7 @@ func (l *LinuxRenewer) RenewControlPlaneCerts(
 	return nil
 }
 
+// RenewEtcdCerts renews certificates for etcd nodes.
 func (l *LinuxRenewer) RenewEtcdCerts(
 	ctx context.Context,
 	node string,

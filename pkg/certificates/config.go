@@ -19,7 +19,6 @@ type SSHConfig struct {
 	User     string `yaml:"sshUser"`
 	KeyPath  string `yaml:"sshKey"`
 	Password string `yaml:"-"` // enviroment vairables
-
 }
 
 // NodeConfig holds configuration for a group of nodes.
