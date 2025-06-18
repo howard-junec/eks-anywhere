@@ -125,7 +125,7 @@ func (l *LinuxRenewer) copyEtcdCerts(
 }
 
 func buildCPBackupCmd(component string, hasExternalEtcd bool, backup string) []string {
-	backupPath := fmt.Sprintf("/etc/kubernetes/pki.bak_%s", backup) // 不需要单引号,sh -c 会处理
+	backupPath := fmt.Sprintf("/etc/kubernetes/pki.bak_%s", backup)
 
 	if component == constants.ControlPlaneComponent && hasExternalEtcd {
 		script := fmt.Sprintf(
