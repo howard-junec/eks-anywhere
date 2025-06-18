@@ -42,15 +42,6 @@ type DefaultSSHRunner struct {
 	sshPasswd  string
 }
 
-// NewSSHRunner creates a new DefaultSSHRunner.
-//
-//	func NewSSHRunner() *DefaultSSHRunner {
-//		return &DefaultSSHRunner{
-//			sshDialer: func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
-//				return ssh.Dial(network, addr, config)
-//			},
-//		}
-//	}
 func NewSSHRunner(cfg SSHConfig) (*DefaultSSHRunner, error) {
 	r := &DefaultSSHRunner{
 		sshDialer: func(network, addr string, config *ssh.ClientConfig) (sshClient, error) {
@@ -133,7 +124,8 @@ func (r *DefaultSSHRunner) RunCommand(ctx context.Context, node string, cmds []s
 	}
 	defer client.Close()
 
-	cmdStr := strings.Join(cmds, " && ")
+	// cmdStr := strings.Join(cmds, " && ")
+	cmdStr := strings.Join(cmds, " ")
 
 	done := make(chan error, 1)
 	go func() {
@@ -194,7 +186,8 @@ func (r *DefaultSSHRunner) RunCommandWithOutput(ctx context.Context, node string
 	}
 	defer client.Close()
 
-	cmdStr := strings.Join(cmds, " && ")
+	// cmdStr := strings.Join(cmds, " && ")
+	cmdStr := strings.Join(cmds, " ")
 
 	type result struct {
 		output string
