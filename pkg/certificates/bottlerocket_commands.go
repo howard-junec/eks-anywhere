@@ -29,7 +29,6 @@ func buildBRControlPlaneRenewCertsCmd() []string {
 	script := `ctr run \
 --mount type=bind,src=/var/lib/kubeadm,dst=/var/lib/kubeadm,options=rbind:rw \
 --mount type=bind,src=/var/lib/kubeadm,dst=/etc/kubernetes,options=rbind:rw \
---net-host \
 --rm ${IMAGE_ID} tmp-cert-renew \
 /opt/bin/kubeadm certs renew all`
 	return []string{script}
@@ -39,7 +38,6 @@ func buildBRControlPlaneCheckCertsCmd() []string {
 	script := `ctr run \
 --mount type=bind,src=/var/lib/kubeadm,dst=/var/lib/kubeadm,options=rbind:rw \
 --mount type=bind,src=/var/lib/kubeadm,dst=/etc/kubernetes,options=rbind:rw \
---net-host \
 --rm ${IMAGE_ID} tmp-cert-renew \
 /opt/bin/kubeadm certs check-expiration`
 	return []string{script}
