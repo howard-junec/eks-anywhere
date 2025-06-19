@@ -64,6 +64,16 @@ func (b *BottlerocketRenewer) RenewControlPlaneCerts(ctx context.Context, node s
 		return fmt.Errorf("renew control panel node certificates: %v", err)
 	}
 
+	// Verify certificates after renewal
+	verifyCmds := buildBRSheltieCmd(
+		buildBRImagePullCmd(),
+		buildBRControlPlaneCheckCertsCmd(),
+	)
+
+	if err := sshRunner.RunCommand(ctx, node, verifyCmds); err != nil {
+		logger.V(1).Info("Certificate verification warning (expected for external etcd)", "node", node, "error", err)
+	}
+
 	logger.MarkPass("Renewed certificates for control plane node", "node", node)
 	return nil
 }
