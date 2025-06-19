@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -42,30 +44,41 @@ func init() {
 }
 
 // newRenewerForCmd builds dependencies & returns a ready to-use Renewer.
-func newRenewerForCmd(ctx context.Context, cfg *certificates.RenewalConfig) (*certificates.Renewer, error) {
+func newRenewerForCmd(ctx context.Context, cfg *certificates.RenewalConfig) (*certificates.Renewer, func(), error) {
 	deps, err := dependencies.NewFactory().
 		WithExecutableBuilder().
 		WithKubectl().
 		WithUnAuthKubeClient().
 		Build(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	kubeCfgPath := kubeconfig.FromClusterName(cfg.ClusterName)
+	// temporary kubeconfig
+	kubeCfgPath, cleanup, err := createTempKubeconfig(cfg.ClusterName)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	kubeClient := deps.UnAuthKubeClient.KubeconfigClient(kubeCfgPath)
 
-	osKey := cfg.OS
-	if osKey == string(v1alpha1.Ubuntu) || osKey == string(v1alpha1.RedHat) {
-		osKey = string(certificates.OSTypeLinux)
+	os := cfg.OS
+	if os == string(v1alpha1.Ubuntu) || os == string(v1alpha1.RedHat) {
+		os = string(certificates.OSTypeLinux)
 	}
-	osRenewer, err := certificates.BuildOSRenewer(osKey)
+	osRenewer, err := certificates.BuildOSRenewer(os)
 	if err != nil {
-		return nil, err
+		cleanup()
+		return nil, nil, err
 	}
 
-	return certificates.NewRenewer(kubeClient, osRenewer)
+	renewer, err := certificates.NewRenewer(kubeClient, osRenewer)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+
+	return renewer, cleanup, nil
 }
 
 func (rc *renewCertificatesOptions) renewCertificates(cmd *cobra.Command, _ []string) error {
@@ -79,10 +92,44 @@ func (rc *renewCertificatesOptions) renewCertificates(cmd *cobra.Command, _ []st
 		return err
 	}
 
-	renewer, err := newRenewerForCmd(ctx, cfg)
+	renewer, cleanup, err := newRenewerForCmd(ctx, cfg)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	return renewer.RenewCertificates(ctx, cfg, rc.component)
+}
+
+func createTempKubeconfig(clusterName string) (string, func(), error) {
+	originalPath := kubeconfig.FromClusterName(clusterName)
+	tempPath := fmt.Sprintf("%s.backup.%d", originalPath, time.Now().Unix())
+
+	fmt.Printf("DEBUG: Creating temp kubeconfig\n")
+	fmt.Printf("DEBUG: originalPath = %s\n", originalPath)
+	fmt.Printf("DEBUG: tempPath = %s\n", tempPath)
+
+	if err := copyFile(originalPath, tempPath); err != nil {
+		return "", nil, fmt.Errorf("failed to copy kubeconfig: %v", err)
+	}
+
+	if _, err := os.Stat(tempPath); err != nil {
+		return "", nil, fmt.Errorf("temp file not created: %v", err)
+	}
+
+	fmt.Printf("DEBUG: Temp kubeconfig created successfully\n")
+
+	cleanup := func() {
+		fmt.Printf("DEBUG: Cleaning up temp kubeconfig: %s\n", tempPath)
+		os.Remove(tempPath)
+	}
+	return tempPath, cleanup, nil
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0644)
 }

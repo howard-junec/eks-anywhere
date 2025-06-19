@@ -40,7 +40,7 @@ var osRenewerBuilders = map[string]func() OSRenewer{
 		return NewLinuxRenewer()
 	},
 	// comment for focus ubuntu pr
-	// string(OSTypeBottlerocket): func() OSRenewer {
-	// 	return NewBottlerocketRenewer()
-	// },
+	string(OSTypeBottlerocket): func() OSRenewer {
+		return NewBottlerocketRenewer()
+	},
 }

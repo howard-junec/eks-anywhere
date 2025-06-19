@@ -64,10 +64,6 @@ func (b *BottlerocketRenewer) RenewControlPlaneCerts(ctx context.Context, node s
 		return fmt.Errorf("renew control panel node certificates: %v", err)
 	}
 
-	if VerbosityLevel >= 1 {
-		b.checkCertificates(ctx, node, sshRunner)
-	}
-
 	logger.MarkPass("Renewed certificates for control plane node", "node", node)
 	return nil
 }
@@ -118,8 +114,6 @@ func (b *BottlerocketRenewer) RenewEtcdCerts(ctx context.Context, node string, s
 		return fmt.Errorf("renew certificates: %v", err)
 	}
 
-	// if err := sshRunner.RunCommand(ctx, node, buildBRSheltieCmd(
-	// 	buildBREtcdCopyCertsToTmpCmd(remoteTempDir),
 	if err := sshRunner.RunCommand(ctx, node, buildBRSheltieCmd(
 		buildBREtcdCopyCertsToTmpCmd(remoteTempDir),
 	)); err != nil {
@@ -133,8 +127,6 @@ func (b *BottlerocketRenewer) RenewEtcdCerts(ctx context.Context, node string, s
 		return fmt.Errorf("copy certificates3: %v", err)
 	}
 
-	// if err := sshRunner.RunCommand(ctx, node, buildBRSheltieCmd(
-	// 	buildBREtcdCleanupTmpCmd(remoteTempDir),
 	if err := sshRunner.RunCommand(ctx, node, buildBRSheltieCmd(
 		buildBREtcdCleanupTmpCmd(remoteTempDir),
 	)); err != nil {
@@ -155,7 +147,6 @@ func (b *BottlerocketRenewer) copyEtcdCerts(ctx context.Context, node string, ss
 	logger.V(2).Info("Reading certificate from ETCD node", "node", node)
 	logger.V(2).Info("Using backup directory", "path", backupDir)
 
-	// remoteTempDir := filepath.Join(brTempDir, tempLocalEtcdCertsDir)
 	remoteTempDir := brTempDir
 
 	if _, err := sshRunner.RunCommandWithOutput(ctx, node, buildBRListTmpFilesCmd(remoteTempDir)); err != nil {
@@ -268,27 +259,6 @@ func copyFile(src, dest string) error {
 	}
 
 	return nil
-}
-
-func (b *BottlerocketRenewer) checkCertificates(ctx context.Context, node string, sshRunner SSHRunner) {
-	checkCmds := buildBRSheltieCmd(
-		buildBRImagePullCmd(),
-		buildBRControlPlaneCheckCertsCmd(),
-	)
-
-	output, err := sshRunner.RunCommandWithOutput(ctx, node, checkCmds)
-
-	if err != nil {
-		logger.Info(fmt.Sprintf("Certificate check failed: %v", err), "node", node)
-	} else {
-		logger.Info("Certificate check results:", "node", node)
-	}
-
-	for _, line := range strings.Split(output, "\n") {
-		if line != "" {
-			logger.Info("  " + line)
-		}
-	}
 }
 
 func buildBRSheltieCmd(commands ...[]string) []string {

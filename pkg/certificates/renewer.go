@@ -149,7 +149,6 @@ func (r *Renewer) updateAPIServerEtcdClientSecret(ctx context.Context, clusterNa
 	if secret.Data == nil {
 		secret.Data = make(map[string][]byte)
 	}
-	secret.Type = corev1.SecretTypeTLS
 	secret.Data["tls.crt"] = crtData
 	secret.Data["tls.key"] = keyData
 	if err = r.kube.Update(ctx, secret); err != nil {

@@ -230,5 +230,9 @@ func (r *DefaultSSHRunner) buildCommandString(cmds []string) string {
 			return fmt.Sprintf("%s %s %s '%s'", cmds[0], cmds[1], cmds[2], cmds[3])
 		}
 	}
+
+	if len(cmds) == 1 && strings.Contains(cmds[0], "sudo sheltie") {
+		return cmds[0]
+	}
 	return strings.Join(cmds, " ")
 }

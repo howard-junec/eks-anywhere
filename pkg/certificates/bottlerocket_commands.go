@@ -83,11 +83,31 @@ fi`
 	return []string{script}
 }
 
+// func buildBRControlPlaneRestartPodsCmd() []string {
+// 	script := `apiclient get | apiclient exec admin jq -r '.settings.kubernetes["static-pods"] | keys[]' \
+//  | xargs -n1 -I{} apiclient set settings.kubernetes.static-pods.{}.enabled=false
+// apiclient get | apiclient exec admin jq -r '.settings.kubernetes["static-pods"] | keys[]' \
+//  | xargs -n1 -I{} apiclient set settings.kubernetes.static-pods.{}.enabled=true`
+// 	return []string{script}
+// }
+
 func buildBRControlPlaneRestartPodsCmd() []string {
-	script := `apiclient get | apiclient exec admin jq -r '.settings.kubernetes["static-pods"] | keys[]' \
- | xargs -n1 -I{} apiclient set settings.kubernetes.static-pods.{}.enabled=false
-apiclient get | apiclient exec admin jq -r '.settings.kubernetes["static-pods"] | keys[]' \
- | xargs -n1 -I{} apiclient set settings.kubernetes.static-pods.{}.enabled=true`
+	script := `echo "Starting static pod restart..."
+apiclient set settings.kubernetes.static-pods.kube-apiserver.enabled=false
+echo "Disabled kube-apiserver"
+apiclient set settings.kubernetes.static-pods.kube-controller-manager.enabled=false
+echo "Disabled kube-controller-manager"
+apiclient set settings.kubernetes.static-pods.kube-scheduler.enabled=false
+echo "Disabled kube-scheduler"
+echo "Sleeping for 10 seconds..."
+sleep 10
+apiclient set settings.kubernetes.static-pods.kube-apiserver.enabled=true
+echo "Enabled kube-apiserver"
+apiclient set settings.kubernetes.static-pods.kube-controller-manager.enabled=true
+echo "Enabled kube-controller-manager"
+apiclient set settings.kubernetes.static-pods.kube-scheduler.enabled=true
+echo "Enabled kube-scheduler"
+echo "Static pod restart completed"`
 	return []string{script}
 }
 
