@@ -267,7 +267,7 @@ func buildBRSheltieCmd(commands ...[]string) []string {
 		flatCommands = append(flatCommands, cmdSlice...)
 	}
 
-	script := strings.Join(flatCommands, " && \\\n")
+	script := strings.Join(flatCommands, "\n")
 
 	fullCommand := fmt.Sprintf("sudo sheltie << 'EOF'\nset -euo pipefail\n%s\nEOF", script)
 	return []string{fullCommand}
