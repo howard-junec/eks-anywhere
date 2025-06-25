@@ -65,7 +65,7 @@ func newRenewerForCmd(ctx context.Context, cfg *certificates.RenewalConfig) (*ce
 		return nil, err
 	}
 
-	return certificates.NewRenewer(kubeClient, osRenewer)
+	return certificates.NewRenewer(kubeClient, osRenewer, cfg)
 }
 
 func (rc *renewCertificatesOptions) renewCertificates(cmd *cobra.Command, _ []string) error {

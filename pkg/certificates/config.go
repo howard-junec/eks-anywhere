@@ -51,6 +51,17 @@ func ParseConfig(path string) (*RenewalConfig, error) {
 		return nil, fmt.Errorf("validating config: %v", err)
 	}
 
+	// get password from env varibales
+	if len(config.Etcd.Nodes) > 0 {
+		if pass := os.Getenv("EKSA_SSH_KEY_PASSPHRASE_ETCD"); pass != "" {
+			config.Etcd.SSH.Password = pass
+		}
+	}
+
+	if pass := os.Getenv("EKSA_SSH_KEY_PASSPHRASE_CP"); pass != "" {
+		config.ControlPlane.SSH.Password = pass
+	}
+
 	return config, nil
 }
 
