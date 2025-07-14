@@ -50,8 +50,6 @@ func (l *LinuxRenewer) RenewControlPlaneCerts(
 		if _, err := ssh.RunCommand(ctx, node, "sudo kubeadm certs check-expiration"); err != nil {
 			return fmt.Errorf("validating control plane certs: %v", err)
 		}
-	} else {
-		logger.V(4).Info("Skipping kubeadm cert validation for external etcd setup", "node", node)
 	}
 
 	if hasExternalEtcd {
@@ -77,7 +75,7 @@ func (l *LinuxRenewer) RenewEtcdCerts(
 	node string,
 	ssh SSHRunner,
 ) error {
-	logger.V(0).Info("Processing etcd node", "os", l.osType, "node", node)
+	logger.V(0).Info("Renewing etcd certificates", "node", node)
 
 	if _, err := ssh.RunCommand(ctx, node, l.backupEtcdCerts()); err != nil {
 		return fmt.Errorf("backing up etcd certs: %v", err)
@@ -106,11 +104,11 @@ func (l *LinuxRenewer) CopyEtcdCerts(
 
 	crt, err := cat("pki/apiserver-etcd-client.crt")
 	if err != nil {
-		return fmt.Errorf("read crt: %v", err)
+		return fmt.Errorf("reading etcd certificate file: %v", err)
 	}
 	key, err := cat("pki/apiserver-etcd-client.key")
 	if err != nil {
-		return fmt.Errorf("read key: %v", err)
+		return fmt.Errorf("reading etcd key file: %v", err)
 	}
 	if crt == "" || key == "" {
 		return fmt.Errorf("etcd client cert or key is empty")
@@ -127,7 +125,6 @@ func (l *LinuxRenewer) CopyEtcdCerts(
 		return err
 	}
 
-	logger.V(4).Info("Copied etcd client certs", "path", dstDir)
 	return nil
 }
 
@@ -166,7 +163,6 @@ func (l *LinuxRenewer) validateEtcdCerts() string {
 func (l *LinuxRenewer) TransferCertsToControlPlane(
 	ctx context.Context, node string, ssh SSHRunner,
 ) error {
-	logger.V(4).Info("Certificates transferred", "node", node)
 
 	crtPath := filepath.Join(l.backup, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
 	keyPath := filepath.Join(l.backup, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
@@ -190,7 +186,6 @@ func (l *LinuxRenewer) TransferCertsToControlPlane(
 		return fmt.Errorf("copying key: %v", err)
 	}
 
-	logger.V(4).Info("Certificates transferred", "node", node)
 	return nil
 }
 
