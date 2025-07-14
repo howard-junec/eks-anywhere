@@ -97,32 +97,36 @@ func (l *LinuxRenewer) CopyEtcdCerts(
 	node string,
 	ssh SSHRunner,
 ) error {
-	cat := func(file string) (string, error) {
+	readFile := func(file string) (string, error) {
 		return ssh.RunCommand(ctx, node,
 			fmt.Sprintf("sudo cat %s", filepath.Join(linuxEtcdCertDir, file)))
 	}
 
-	crt, err := cat("pki/apiserver-etcd-client.crt")
+	certificateContent, err := readFile("pki/apiserver-etcd-client.crt")
 	if err != nil {
 		return fmt.Errorf("reading etcd certificate file: %v", err)
 	}
-	key, err := cat("pki/apiserver-etcd-client.key")
+	keyContent, err := readFile("pki/apiserver-etcd-client.key")
 	if err != nil {
 		return fmt.Errorf("reading etcd key file: %v", err)
 	}
-	if crt == "" || key == "" {
+	if certificateContent == "" || keyContent == "" {
 		return fmt.Errorf("etcd client cert or key is empty")
 	}
 
-	dstDir := filepath.Join(l.backup, tempLocalEtcdCertsDir)
-	if err := os.MkdirAll(dstDir, 0o700); err != nil {
-		return fmt.Errorf("creating etcd backup direcotry %s: %v", dstDir, err)
+	localCertificateDir := filepath.Join(l.backup, tempLocalEtcdCertsDir)
+	if err := os.MkdirAll(localCertificateDir, 0o700); err != nil {
+		return fmt.Errorf("creating etcd backup direcotry %s: %v", localCertificateDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(dstDir, "apiserver-etcd-client.crt"), []byte(crt), 0o600); err != nil {
-		return err
+
+	localCertificatePath := filepath.Join(localCertificateDir, "apiserver-etcd-client.crt")
+	localKeyFilePath := filepath.Join(localCertificateDir, "apiserver-etcd-client.key")
+
+	if err := os.WriteFile(localCertificatePath, []byte(certificateContent), 0o600); err != nil {
+		return fmt.Errorf("writing etcd certificate file: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dstDir, "apiserver-etcd-client.key"), []byte(key), 0o600); err != nil {
-		return err
+	if err := os.WriteFile(localKeyFilePath, []byte(keyContent), 0o600); err != nil {
+		return fmt.Errorf("writing etcd key file: %v", err)
 	}
 
 	return nil
@@ -164,26 +168,26 @@ func (l *LinuxRenewer) TransferCertsToControlPlane(
 	ctx context.Context, node string, ssh SSHRunner,
 ) error {
 
-	crtPath := filepath.Join(l.backup, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
-	keyPath := filepath.Join(l.backup, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
+	localCertificatePath := filepath.Join(l.backup, tempLocalEtcdCertsDir, "apiserver-etcd-client.crt")
+	localKeyFilePath := filepath.Join(l.backup, tempLocalEtcdCertsDir, "apiserver-etcd-client.key")
 
-	crtData, err := os.ReadFile(crtPath)
+	certificateBytes, err := os.ReadFile(localCertificatePath)
 	if err != nil {
-		return fmt.Errorf("reading certificate file: %v", err)
+		return fmt.Errorf("reading certificate file from the admin machine: %v", err)
 	}
-	keyData, err := os.ReadFile(keyPath)
+	keyBytes, err := os.ReadFile(localKeyFilePath)
 	if err != nil {
-		return fmt.Errorf("reading key file: %v", err)
+		return fmt.Errorf("reading key file from the admin machine: %v", err)
 	}
 
-	crtCmd := fmt.Sprintf("sudo tee %s/apiserver-etcd-client.crt > /dev/null << 'EOF'\n%s\nEOF", linuxTempDir, string(crtData))
-	if _, err := ssh.RunCommand(ctx, node, crtCmd); err != nil {
-		return fmt.Errorf("copying certificate: %v", err)
+	certificateCommand := fmt.Sprintf("sudo tee %s/apiserver-etcd-client.crt > /dev/null << 'EOF'\n%s\nEOF", linuxTempDir, string(certificateBytes))
+	if _, err := ssh.RunCommand(ctx, node, certificateCommand); err != nil {
+		return fmt.Errorf("copying certificate to control plane: %v", err)
 	}
 
-	keyCmd := fmt.Sprintf("sudo tee %s/apiserver-etcd-client.key > /dev/null << 'EOF'\n%s\nEOF", linuxTempDir, string(keyData))
-	if _, err := ssh.RunCommand(ctx, node, keyCmd); err != nil {
-		return fmt.Errorf("copying key: %v", err)
+	keyCommand := fmt.Sprintf("sudo tee %s/apiserver-etcd-client.key > /dev/null << 'EOF'\n%s\nEOF", linuxTempDir, string(keyBytes))
+	if _, err := ssh.RunCommand(ctx, node, keyCommand); err != nil {
+		return fmt.Errorf("copying key to control plane: %v", err)
 	}
 
 	return nil
