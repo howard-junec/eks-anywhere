@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aws/eks-anywhere/pkg/certificates/mocks"
 	"github.com/golang/mock/gomock"
+
+	"github.com/aws/eks-anywhere/pkg/certificates/mocks"
 )
 
 func prepareLocalEtcdFiles(t *testing.T, dir string) {
@@ -47,8 +48,8 @@ func TestBR_TransferCerts_ReadCertError(t *testing.T) {
 
 	tmp := t.TempDir()
 	local := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(local, 0700)
-	os.WriteFile(filepath.Join(local, "apiserver-etcd-client.key"), []byte("key"), 0600)
+	os.MkdirAll(local, 0o700)
+	os.WriteFile(filepath.Join(local, "apiserver-etcd-client.key"), []byte("key"), 0o600)
 
 	r := NewBottlerocketRenewer(tmp)
 	if err := r.TransferCertsToControlPlane(context.Background(), "cp", mocks.NewMockSSHRunner(ctrl)); err == nil {
@@ -62,8 +63,8 @@ func TestBR_TransferCerts_ReadKeyError(t *testing.T) {
 
 	tmp := t.TempDir()
 	local := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(local, 0700)
-	os.WriteFile(filepath.Join(local, "apiserver-etcd-client.crt"), []byte("crt"), 0600)
+	os.MkdirAll(local, 0o700)
+	os.WriteFile(filepath.Join(local, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
 
 	r := NewBottlerocketRenewer(tmp)
 	if err := r.TransferCertsToControlPlane(context.Background(), "cp", mocks.NewMockSSHRunner(ctrl)); err == nil {
@@ -191,7 +192,7 @@ func TestBR_CopyEtcdCerts_LocalDirCreateFail(t *testing.T) {
 	tmp := t.TempDir()
 
 	bad := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.WriteFile(bad, []byte("x"), 0600)
+	os.WriteFile(bad, []byte("x"), 0o600)
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewBottlerocketRenewer(tmp)
@@ -306,7 +307,7 @@ func TestBR_CopyEtcdCerts_WriteCertFail(t *testing.T) {
 	defer ctrl.Finish()
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	if err := os.MkdirAll(localDir, 0500); err != nil {
+	if err := os.MkdirAll(localDir, 0o500); err != nil {
 		t.Fatalf("prep: %v", err)
 	}
 

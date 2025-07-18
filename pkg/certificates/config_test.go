@@ -8,13 +8,14 @@ import (
 	"strings"
 	"testing"
 
+	gomock "github.com/golang/mock/gomock"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	kubemocks "github.com/aws/eks-anywhere/pkg/clients/kubernetes/mocks"
 	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/types"
-	gomock "github.com/golang/mock/gomock"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
 const (
@@ -512,7 +513,7 @@ func TestParseConfig_InvalidYAML(t *testing.T) {
 
 func TestParseConfig_EnvPasswordsInjected(t *testing.T) {
 	keyFile := "/tmp/test-key-pass"
-	os.WriteFile(keyFile, []byte("k"), 0600)
+	os.WriteFile(keyFile, []byte("k"), 0o600)
 	defer os.Remove(keyFile)
 
 	yml := fmt.Sprintf(
@@ -553,7 +554,7 @@ func TestParseConfig_EnvPasswordsInjected(t *testing.T) {
 
 func TestValidateConfig_MissingOS(t *testing.T) {
 	key := "/tmp/key-missing-os"
-	os.WriteFile(key, []byte("k"), 0600)
+	os.WriteFile(key, []byte("k"), 0o600)
 	defer os.Remove(key)
 
 	err := ValidateConfig(&RenewalConfig{
@@ -567,7 +568,7 @@ func TestValidateConfig_MissingOS(t *testing.T) {
 
 func TestValidateConfig_EtcdSectionInvalid(t *testing.T) {
 	key := "/tmp/key-bad-etcd"
-	os.WriteFile(key, []byte("k"), 0600)
+	os.WriteFile(key, []byte("k"), 0o600)
 	defer os.Remove(key)
 
 	cfg := &RenewalConfig{
@@ -583,14 +584,14 @@ func TestValidateConfig_EtcdSectionInvalid(t *testing.T) {
 
 func TestValidateNodeConfig_MissingSSHUser(t *testing.T) {
 	key := "/tmp/key-no-user"
-	os.WriteFile(key, []byte("k"), 0600)
+	os.WriteFile(key, []byte("k"), 0o600)
 	defer os.Remove(key)
 
 	nc := &NodeConfig{
 		Nodes: []string{"1.1.1.1"},
 		SSH:   SSHConfig{KeyPath: key},
 	}
-	if err := ValidateNodeConfig(nc); err == nil || !strings.Contains(err.Error(), "sshUser is required") {
+	if err := validateNodeConfig(nc); err == nil || !strings.Contains(err.Error(), "sshUser is required") {
 		t.Fatalf("want sshUser required error, got %v", err)
 	}
 }
@@ -600,7 +601,7 @@ func TestValidateNodeConfig_MissingKeyPath(t *testing.T) {
 		Nodes: []string{"1.1.1.1"},
 		SSH:   SSHConfig{User: "test"},
 	}
-	if err := ValidateNodeConfig(nc); err == nil || !strings.Contains(err.Error(), "sshKey is required") {
+	if err := validateNodeConfig(nc); err == nil || !strings.Contains(err.Error(), "sshKey is required") {
 		t.Fatalf("want sshKey required error, got %v", err)
 	}
 }

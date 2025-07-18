@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aws/eks-anywhere/pkg/certificates/mocks"
 	"github.com/golang/mock/gomock"
+
+	"github.com/aws/eks-anywhere/pkg/certificates/mocks"
 )
 
 var errBoom = fmt.Errorf("boom")
@@ -113,7 +114,7 @@ func TestLinuxRenewer_CopyEtcdCerts_DirCreateError(t *testing.T) {
 	tmp := t.TempDir()
 
 	badDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	if err := os.WriteFile(badDir, []byte("x"), 0600); err != nil {
+	if err := os.WriteFile(badDir, []byte("x"), 0o600); err != nil {
 		t.Fatalf("prep: %v", err)
 	}
 
@@ -264,11 +265,11 @@ func TestLinuxRenewer_RenewControlPlaneCerts_CopyEtcdCertFails(t *testing.T) {
 	tmp := t.TempDir()
 
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	if err := os.MkdirAll(localDir, 0700); err != nil {
+	if err := os.MkdirAll(localDir, 0o700); err != nil {
 		t.Fatalf("prep: %v", err)
 	}
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0600)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0600)
+	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
+	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600)
 
 	r := NewLinuxRenewer(tmp)
 
@@ -300,8 +301,8 @@ func TestLinuxRenewer_TransferCerts_ReadCertError(t *testing.T) {
 
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(localDir, 0700)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0600)
+	os.MkdirAll(localDir, 0o700)
+	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600)
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewLinuxRenewer(tmp)
@@ -317,8 +318,8 @@ func TestLinuxRenewer_TransferCerts_ReadKeyError(t *testing.T) {
 
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(localDir, 0700)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0600)
+	os.MkdirAll(localDir, 0o700)
+	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewLinuxRenewer(tmp)
@@ -334,9 +335,9 @@ func TestLinuxRenewer_TransferCerts_CopyCertCmdFails(t *testing.T) {
 
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(localDir, 0700)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0600)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0600)
+	os.MkdirAll(localDir, 0o700)
+	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
+	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600)
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewLinuxRenewer(tmp)
@@ -358,9 +359,9 @@ func TestLinuxRenewer_TransferCerts_CopyKeyCmdFails(t *testing.T) {
 
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(localDir, 0700)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0600)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0600)
+	os.MkdirAll(localDir, 0o700)
+	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
+	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600)
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewLinuxRenewer(tmp)
@@ -459,9 +460,9 @@ func TestLinuxRenewer_TransferCertsToControlPlane_Success(t *testing.T) {
 
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(localDir, 0700)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0600)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0600)
+	os.MkdirAll(localDir, 0o700)
+	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
+	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600)
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewLinuxRenewer(tmp)
