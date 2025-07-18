@@ -8,10 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-
-	"github.com/golang/mock/gomock"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/aws/eks-anywhere/pkg/certificates/mocks"
@@ -66,7 +65,6 @@ func TestNewRenewerSuccess(t *testing.T) {
 	}
 
 	err := renewer.RenewCertificates(context.Background(), cfg, "etcd")
-
 	if err != nil {
 		t.Fatalf("RenewCertificates() expected no error, got: %v", err)
 	}
@@ -175,7 +173,7 @@ func TestRenewEtcdCertsSuccess(t *testing.T) {
 	sshEtcd := mocks.NewMockSSHRunner(ctrl)
 	sshEtcd.EXPECT().
 		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, node, cmd string) (string, error) {
+		DoAndReturn(func(_ context.Context, _, cmd string) (string, error) {
 			if strings.Contains(cmd, "cat") && strings.Contains(cmd, "apiserver-etcd-client.crt") {
 				return "dummy-cert-content", nil
 			}
@@ -345,7 +343,7 @@ func TestRenewCertificates_UpdateAPIServerEtcdClientSecretError(t *testing.T) {
 
 	sshEtcd.EXPECT().
 		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, node, cmd string) (string, error) {
+		DoAndReturn(func(_ context.Context, _, cmd string) (string, error) {
 			if strings.Contains(cmd, "sudo cat /etc/etcd/pki/apiserver-etcd-client.crt") {
 				return "certificate content", nil
 			}
@@ -428,7 +426,7 @@ func TestRenewCertificates_CopyEtcdCertsError(t *testing.T) {
 	callCount := 0
 	sshEtcd.EXPECT().
 		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, node, cmd string) (string, error) {
+		DoAndReturn(func(_ context.Context, _, _ string) (string, error) {
 			callCount++
 			if callCount <= 3 {
 				return "", nil
@@ -495,7 +493,6 @@ func TestUpdateAPIServerEtcdClientSecret_SecretNotFound(t *testing.T) {
 	writeDummyEtcdCerts(t, renewer.backupDir)
 
 	err := renewer.updateAPIServerEtcdClientSecret(context.Background(), "test-cluster")
-
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -520,7 +517,6 @@ func TestUpdateAPIServerEtcdClientSecret_GetError(t *testing.T) {
 	writeDummyEtcdCerts(t, renewer.backupDir)
 
 	err := renewer.updateAPIServerEtcdClientSecret(context.Background(), "test-cluster")
-
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -581,7 +577,6 @@ func TestUpdateAPIServerEtcdClientSecret_SuccessfulUpdate(t *testing.T) {
 	writeDummyEtcdCerts(t, renewer.backupDir)
 
 	err := renewer.updateAPIServerEtcdClientSecret(context.Background(), "test-cluster")
-
 	if err != nil {
 		t.Fatalf("updateAPIServerEtcdClientSecret() expected no error, got: %v", err)
 	}
@@ -596,7 +591,6 @@ func TestCleanup_RemoveAllError(t *testing.T) {
 	}
 
 	renewer.cleanup()
-
 }
 
 func writeDummyEtcdCerts(t *testing.T, backupDir string) {

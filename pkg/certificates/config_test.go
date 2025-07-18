@@ -322,43 +322,12 @@ func Test_getControlPlaneIPs_Success(t *testing.T) {
 			return nil
 		})
 
-	got, err := GetControlPlaneIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
+	got, err := getControlPlaneIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
 	if err != nil {
 		t.Fatalf("getControlPlaneIPs() expected no error, got: %v", err)
 	}
 	if len(got) != 1 || got[0] != cpIP {
 		t.Fatalf("getControlPlaneIPs() expected [%s], got: %v", cpIP, got)
-	}
-}
-
-func Test_getControlPlaneIPs_NoIPs(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	k := kubemocks.NewMockClient(ctrl)
-
-	machines := &clusterv1.MachineList{
-		Items: []clusterv1.Machine{
-			buildMachine(map[string]string{
-				clusterNameLabel:  clusterLabel,
-				controlPlaneLabel: "",
-			}, ""),
-		},
-	}
-
-	k.EXPECT().
-		List(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, l interface{}, _ ...interface{}) error {
-			*l.(*clusterv1.MachineList) = *machines
-			return nil
-		})
-
-	_, err := GetControlPlaneIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
-	if err == nil {
-		t.Fatalf("getControlPlaneIPs() expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "no control plane IPs") {
-		t.Fatalf("expected error containing 'no control plane IPs', got: %v", err)
 	}
 }
 
@@ -384,7 +353,7 @@ func Test_getEtcdIPs_Success(t *testing.T) {
 			return nil
 		})
 
-	got, err := GetEtcdIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
+	got, err := getEtcdIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
 	if err != nil {
 		t.Fatalf("getEtcdIPs() expected no error, got: %v", err)
 	}
@@ -393,25 +362,67 @@ func Test_getEtcdIPs_Success(t *testing.T) {
 	}
 }
 
-func Test_getEtcdIPs_NoneFound(t *testing.T) {
+func TestPopulateConfig_EtcdIPsError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	k := kubemocks.NewMockClient(ctrl)
 
+	cpMachines := &clusterv1.MachineList{
+		Items: []clusterv1.Machine{
+			buildMachine(map[string]string{
+				clusterNameLabel:  clusterLabel,
+				controlPlaneLabel: "",
+			}, cpIP),
+		},
+	}
+
 	k.EXPECT().
 		List(gomock.Any(), gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, l interface{}, _ ...interface{}) error {
-			*l.(*clusterv1.MachineList) = clusterv1.MachineList{}
+			*l.(*clusterv1.MachineList) = *cpMachines
 			return nil
 		})
 
-	_, err := GetEtcdIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
-	if err == nil {
-		t.Fatalf("getEtcdIPs() expected error, got nil")
+	expectedErr := errors.New("etcd list error")
+	k.EXPECT().
+		List(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(expectedErr)
+
+	cfg := &RenewalConfig{
+		ClusterName: clusterLabel,
+		OS:          string(v1alpha1.Ubuntu),
+		ControlPlane: NodeConfig{
+			SSH: SSHConfig{User: "ec2-user", KeyPath: "/test"},
+		},
 	}
-	if !strings.Contains(err.Error(), "no etcd IPs") {
-		t.Fatalf("expected error containing 'no etcd IPs', got: %v", err)
+
+	err := PopulateConfig(context.Background(), cfg, k, &types.Cluster{Name: clusterLabel})
+	if err == nil {
+		t.Fatalf("PopulateConfig() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "retrieving external etcd IPs") {
+		t.Fatalf("expected error containing 'retrieving external etcd IPs', got: %v", err)
+	}
+}
+
+func Test_getControlPlaneIPs_ListError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	k := kubemocks.NewMockClient(ctrl)
+
+	expectedErr := errors.New("api server unavailable")
+	k.EXPECT().
+		List(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(expectedErr)
+
+	_, err := getControlPlaneIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
+	if err == nil {
+		t.Fatalf("getControlPlaneIPs() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "listing machines") {
+		t.Fatalf("expected error containing 'listing machines', got: %v", err)
 	}
 }
 
@@ -655,87 +666,6 @@ func TestPopulateConfig_EarlyReturn(t *testing.T) {
 	}
 	if len(cfg.ControlPlane.Nodes) != 1 || cfg.ControlPlane.Nodes[0] != cpIP {
 		t.Fatalf("PopulateConfig() should preserve existing ControlPlane.Nodes")
-	}
-}
-
-func TestPopulateConfig_EtcdIPsError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	k := kubemocks.NewMockClient(ctrl)
-
-	cpMachines := &clusterv1.MachineList{
-		Items: []clusterv1.Machine{
-			buildMachine(map[string]string{
-				clusterNameLabel:  clusterLabel,
-				controlPlaneLabel: "",
-			}, cpIP),
-		},
-	}
-
-	k.EXPECT().
-		List(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, l interface{}, _ ...interface{}) error {
-			*l.(*clusterv1.MachineList) = *cpMachines
-			return nil
-		})
-
-	k.EXPECT().
-		List(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(errors.New("etcd list error"))
-
-	cfg := &RenewalConfig{
-		ClusterName: clusterLabel,
-		OS:          string(v1alpha1.Ubuntu),
-		ControlPlane: NodeConfig{
-			SSH: SSHConfig{User: "ec2-user", KeyPath: "/test"},
-		},
-	}
-
-	err := PopulateConfig(context.Background(), cfg, k, &types.Cluster{Name: clusterLabel})
-	if err == nil {
-		t.Fatalf("PopulateConfig() expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "retrieving external-etcd IPs") {
-		t.Fatalf("expected error containing 'retrieving external-etcd IPs', got: %v", err)
-	}
-}
-
-func Test_getControlPlaneIPs_EmptyAddresses(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	k := kubemocks.NewMockClient(ctrl)
-
-	machines := &clusterv1.MachineList{
-		Items: []clusterv1.Machine{
-			{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						clusterNameLabel:  clusterLabel,
-						controlPlaneLabel: "",
-					},
-				},
-				Status: clusterv1.MachineStatus{
-					Addresses: []clusterv1.MachineAddress{},
-				},
-			},
-		},
-	}
-
-	k.EXPECT().
-		List(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, l interface{}, _ ...interface{}) error {
-			*l.(*clusterv1.MachineList) = *machines
-			return nil
-		})
-
-	_, err := GetControlPlaneIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
-	if err == nil {
-		t.Fatalf("getControlPlaneIPs() expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "no control plane IPs") {
-		t.Fatalf("expected error containing 'no control plane IPs', got: %v", err)
 	}
 }
 
