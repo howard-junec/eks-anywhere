@@ -322,11 +322,9 @@ func Test_getControlPlaneIPs_Success(t *testing.T) {
 			return nil
 		})
 
-	got, err := getControlPlaneIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
-	if err != nil {
+	if got, err := getControlPlaneIPs(context.Background(), k, &types.Cluster{Name: clusterLabel}); err != nil {
 		t.Fatalf("getControlPlaneIPs() expected no error, got: %v", err)
-	}
-	if len(got) != 1 || got[0] != cpIP {
+	} else if len(got) != 1 || got[0] != cpIP {
 		t.Fatalf("getControlPlaneIPs() expected [%s], got: %v", cpIP, got)
 	}
 }
@@ -353,11 +351,9 @@ func Test_getEtcdIPs_Success(t *testing.T) {
 			return nil
 		})
 
-	got, err := getEtcdIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
-	if err != nil {
+	if got, err := getEtcdIPs(context.Background(), k, &types.Cluster{Name: clusterLabel}); err != nil {
 		t.Fatalf("getEtcdIPs() expected no error, got: %v", err)
-	}
-	if len(got) != 1 || got[0] != etcdIP {
+	} else if len(got) != 1 || got[0] != etcdIP {
 		t.Fatalf("getEtcdIPs() expected [%s], got: %v", etcdIP, got)
 	}
 }
@@ -397,8 +393,7 @@ func TestPopulateConfig_EtcdListError(t *testing.T) {
 		},
 	}
 
-	err := PopulateConfig(context.Background(), cfg, k, &types.Cluster{Name: clusterLabel})
-	if err == nil {
+	if err := PopulateConfig(context.Background(), cfg, k, &types.Cluster{Name: clusterLabel}); err == nil {
 		t.Fatalf("PopulateConfig() expected error, got nil")
 	}
 }
@@ -414,8 +409,7 @@ func Test_getControlPlaneIPs_ListError(t *testing.T) {
 		List(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(expectedErr)
 
-	_, err := getControlPlaneIPs(context.Background(), k, &types.Cluster{Name: clusterLabel})
-	if err == nil {
+	if _, err := getControlPlaneIPs(context.Background(), k, &types.Cluster{Name: clusterLabel}); err == nil {
 		t.Fatalf("getControlPlaneIPs() expected error, got nil")
 	}
 }
@@ -454,8 +448,7 @@ func TestPopulateConfig_Success(t *testing.T) {
 		},
 	}
 
-	err := PopulateConfig(context.Background(), cfg, k, &types.Cluster{Name: clusterLabel})
-	if err != nil {
+	if err := PopulateConfig(context.Background(), cfg, k, &types.Cluster{Name: clusterLabel}); err != nil {
 		t.Fatalf("PopulateConfig() expected no error, got: %v", err)
 	}
 	if len(cfg.ControlPlane.Nodes) != 1 || cfg.ControlPlane.Nodes[0] != cpIP {
@@ -484,8 +477,7 @@ func TestPopulateConfig_ControlPlaneListError(t *testing.T) {
 		},
 	}
 
-	err := PopulateConfig(context.Background(), cfg, k, &types.Cluster{Name: clusterLabel})
-	if err == nil {
+	if err := PopulateConfig(context.Background(), cfg, k, &types.Cluster{Name: clusterLabel}); err == nil {
 		t.Fatalf("PopulateConfig() expected error, got nil")
 	}
 }
@@ -495,8 +487,7 @@ func TestParseConfig_InvalidYAML(t *testing.T) {
 	file, cleanup := createConfigFileFromYAML(t, bad)
 	defer cleanup()
 
-	_, err := ParseConfig(file)
-	if err == nil {
+	if _, err := ParseConfig(file); err == nil {
 		t.Fatalf("ParseConfig(): want YAML error, got %v", err)
 	}
 }
@@ -535,11 +526,9 @@ func TestParseConfig_EnvPasswordsInjected(t *testing.T) {
 	file, cleanup := createConfigFileFromYAML(t, yml)
 	defer cleanup()
 
-	cfg, err := ParseConfig(file)
-	if err != nil {
+	if cfg, err := ParseConfig(file); err != nil {
 		t.Fatalf("unexpected: %v", err)
-	}
-	if cfg.ControlPlane.SSH.Password != "pass-cp" || cfg.Etcd.SSH.Password != "pass-etcd" {
+	} else if cfg.ControlPlane.SSH.Password != "pass-cp" || cfg.Etcd.SSH.Password != "pass-etcd" {
 		t.Fatalf("env passphrase not injected into cfg: %#v", cfg)
 	}
 }
@@ -551,11 +540,10 @@ func TestValidateConfig_MissingOS(t *testing.T) {
 	}
 	defer os.Remove(key)
 
-	err := ValidateConfig(&RenewalConfig{
+	if err := ValidateConfig(&RenewalConfig{
 		ClusterName:  "c",
 		ControlPlane: NodeConfig{Nodes: []string{"n"}, SSH: SSHConfig{User: "u", KeyPath: key}},
-	}, "")
-	if err == nil {
+	}, ""); err == nil {
 		t.Fatalf("want missing os error, got %v", err)
 	}
 }
@@ -572,8 +560,7 @@ func TestValidateConfig_EtcdMissingSSHUser(t *testing.T) {
 		ControlPlane: NodeConfig{Nodes: []string{"n"}, SSH: SSHConfig{User: "u", KeyPath: key}},
 		Etcd:         NodeConfig{Nodes: []string{"e"}, SSH: SSHConfig{KeyPath: key}},
 	}
-	err := ValidateConfig(cfg, "")
-	if err == nil {
+	if err := ValidateConfig(cfg, ""); err == nil {
 		t.Fatalf("want nested etcd validation error, got %v", err)
 	}
 }
@@ -611,8 +598,7 @@ func TestValidateComponentWithConfig_ValidControlPlane(t *testing.T) {
 		ControlPlane: NodeConfig{Nodes: []string{"1.1.1.1"}},
 	}
 
-	err := ValidateComponentWithConfig("control-plane", cfg)
-	if err != nil {
+	if err := ValidateComponentWithConfig("control-plane", cfg); err != nil {
 		t.Fatalf("ValidateComponentWithConfig() expected no error for control-plane component, got: %v", err)
 	}
 }
@@ -625,8 +611,7 @@ func TestValidateComponentWithConfig_ValidEtcdWithNodes(t *testing.T) {
 		Etcd:         NodeConfig{Nodes: []string{"2.2.2.2"}},
 	}
 
-	err := ValidateComponentWithConfig("etcd", cfg)
-	if err != nil {
+	if err := ValidateComponentWithConfig("etcd", cfg); err != nil {
 		t.Fatalf("ValidateComponentWithConfig() expected no error for etcd component with nodes, got: %v", err)
 	}
 }
@@ -638,8 +623,7 @@ func TestValidateComponentWithConfig_EmptyComponent(t *testing.T) {
 		ControlPlane: NodeConfig{Nodes: []string{"1.1.1.1"}},
 	}
 
-	err := ValidateComponentWithConfig("", cfg)
-	if err != nil {
+	if err := ValidateComponentWithConfig("", cfg); err != nil {
 		t.Fatalf("ValidateComponentWithConfig() expected no error for empty component, got: %v", err)
 	}
 }
@@ -659,8 +643,7 @@ func TestPopulateConfig_ExistingNodesEarlyReturn(t *testing.T) {
 		},
 	}
 
-	err := PopulateConfig(context.Background(), cfg, k, &types.Cluster{Name: clusterLabel})
-	if err != nil {
+	if err := PopulateConfig(context.Background(), cfg, k, &types.Cluster{Name: clusterLabel}); err != nil {
 		t.Fatalf("PopulateConfig() expected no error for early return, got: %v", err)
 	}
 	if len(cfg.ControlPlane.Nodes) != 1 || cfg.ControlPlane.Nodes[0] != cpIP {

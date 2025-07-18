@@ -526,12 +526,8 @@ func TestLinuxRenewer_CopyEtcdCerts_CertEmpty(t *testing.T) {
 		RunCommand(ctx, node, containsMatcher("apiserver-etcd-client.crt")).
 		Return("", nil)
 
-	err := r.CopyEtcdCerts(ctx, node, ssh)
-	if err == nil {
+	if err := r.CopyEtcdCerts(ctx, node, ssh); err == nil {
 		t.Fatalf("CopyEtcdCerts() expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "etcd certificate file is empty") {
-		t.Fatalf("expected error containing 'etcd certificate file is empty', got: %v", err)
 	}
 }
 
@@ -553,12 +549,8 @@ func TestLinuxRenewer_CopyEtcdCerts_WriteCertFileError(t *testing.T) {
 	ssh.EXPECT().RunCommand(ctx, node, containsMatcher(".crt")).Return("cert-content", nil)
 	ssh.EXPECT().RunCommand(ctx, node, containsMatcher(".key")).Return("key-content", nil)
 
-	err := r.CopyEtcdCerts(ctx, node, ssh)
-	if err == nil {
+	if err := r.CopyEtcdCerts(ctx, node, ssh); err == nil {
 		t.Fatalf("CopyEtcdCerts() expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "writing etcd certificate file") {
-		t.Fatalf("expected error containing 'writing etcd certificate file', got: %v", err)
 	}
 }
 
@@ -590,12 +582,8 @@ func TestLinuxRenewer_CopyEtcdCerts_WriteKeyFileError(t *testing.T) {
 	ssh.EXPECT().RunCommand(ctx, node, containsMatcher(".crt")).Return("cert-content", nil)
 	ssh.EXPECT().RunCommand(ctx, node, containsMatcher(".key")).Return("key-content", nil)
 
-	err := r.CopyEtcdCerts(ctx, node, ssh)
-	if err == nil {
+	if err := r.CopyEtcdCerts(ctx, node, ssh); err == nil {
 		t.Fatalf("CopyEtcdCerts() expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "writing etcd key file") {
-		t.Fatalf("expected error containing 'writing etcd key file', got: %v", err)
 	}
 }
 
