@@ -268,8 +268,12 @@ func TestLinuxRenewer_RenewControlPlaneCerts_CopyEtcdCertFails(t *testing.T) {
 	if err := os.MkdirAll(localDir, 0o700); err != nil {
 		t.Fatalf("prep: %v", err)
 	}
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600)
+	if err := os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600); err != nil {
+		t.Fatalf("failed to write certificate file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("failed to write key file: %v", err)
+	}
 
 	r := NewLinuxRenewer(tmp)
 
@@ -301,8 +305,12 @@ func TestLinuxRenewer_TransferCerts_ReadCertError(t *testing.T) {
 
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(localDir, 0o700)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600)
+	if err := os.MkdirAll(localDir, 0o700); err != nil {
+		t.Fatalf("failed to create directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("failed to write key file: %v", err)
+	}
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewLinuxRenewer(tmp)
@@ -318,8 +326,12 @@ func TestLinuxRenewer_TransferCerts_ReadKeyError(t *testing.T) {
 
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(localDir, 0o700)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
+	if err := os.MkdirAll(localDir, 0o700); err != nil {
+		t.Fatalf("failed to create directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600); err != nil {
+		t.Fatalf("failed to write certificate file: %v", err)
+	}
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewLinuxRenewer(tmp)
@@ -335,9 +347,15 @@ func TestLinuxRenewer_TransferCerts_CopyCertCmdFails(t *testing.T) {
 
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(localDir, 0o700)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600)
+	if err := os.MkdirAll(localDir, 0o700); err != nil {
+		t.Fatalf("failed to create directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600); err != nil {
+		t.Fatalf("failed to write certificate file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("failed to write key file: %v", err)
+	}
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewLinuxRenewer(tmp)
@@ -359,9 +377,15 @@ func TestLinuxRenewer_TransferCerts_CopyKeyCmdFails(t *testing.T) {
 
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(localDir, 0o700)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600)
+	if err := os.MkdirAll(localDir, 0o700); err != nil {
+		t.Fatalf("failed to create directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600); err != nil {
+		t.Fatalf("failed to write certificate file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("failed to write key file: %v", err)
+	}
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewLinuxRenewer(tmp)
@@ -460,9 +484,15 @@ func TestLinuxRenewer_TransferCertsToControlPlane_Success(t *testing.T) {
 
 	tmp := t.TempDir()
 	localDir := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(localDir, 0o700)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
-	os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600)
+	if err := os.MkdirAll(localDir, 0o700); err != nil {
+		t.Fatalf("failed to create directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.crt"), []byte("crt"), 0o600); err != nil {
+		t.Fatalf("failed to write certificate file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "apiserver-etcd-client.key"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("failed to write key file: %v", err)
+	}
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewLinuxRenewer(tmp)
@@ -569,7 +599,7 @@ func TestLinuxRenewer_CopyEtcdCerts_WriteKeyFileError(t *testing.T) {
 	}
 }
 
-func TestLinuxRenewer_RenewControlPlaneCerts_NoExternalEtcd(t *testing.T) {
+func TestLinuxRenewer_RenewControlPlaneCerts_NoExternalEtcd_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -595,7 +625,7 @@ func TestLinuxRenewer_RenewControlPlaneCerts_NoExternalEtcd(t *testing.T) {
 	}
 }
 
-func TestLinuxRenewer_CopyExternalEtcdCerts_ReturnTrue(t *testing.T) {
+func TestLinuxRenewer_CopyExternalEtcdCerts_NoExternalEtcd_ReturnsTrue(t *testing.T) {
 	r := NewLinuxRenewer(t.TempDir())
 
 	result := r.copyExternalEtcdCerts(false)

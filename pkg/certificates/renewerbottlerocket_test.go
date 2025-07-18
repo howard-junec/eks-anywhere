@@ -15,10 +15,14 @@ func prepareLocalEtcdFiles(t *testing.T, dir string) {
 	t.Helper()
 	local := filepath.Join(dir, tempLocalEtcdCertsDir)
 	if err := os.MkdirAll(local, 0o700); err != nil {
-		t.Fatalf("prep: %v", err)
+		t.Fatalf("failed to create directory: %v", err)
 	}
-	os.WriteFile(filepath.Join(local, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
-	os.WriteFile(filepath.Join(local, "apiserver-etcd-client.key"), []byte("key"), 0o600)
+	if err := os.WriteFile(filepath.Join(local, "apiserver-etcd-client.crt"), []byte("crt"), 0o600); err != nil {
+		t.Fatalf("failed to write certificate file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(local, "apiserver-etcd-client.key"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("failed to write key file: %v", err)
+	}
 }
 
 func TestBR_TransferCerts_Success(t *testing.T) {
@@ -48,8 +52,13 @@ func TestBR_TransferCerts_ReadCertError(t *testing.T) {
 
 	tmp := t.TempDir()
 	local := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(local, 0o700)
-	os.WriteFile(filepath.Join(local, "apiserver-etcd-client.key"), []byte("key"), 0o600)
+	if err := os.MkdirAll(local, 0o700); err != nil {
+		t.Fatalf("failed to create directory: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(local, "apiserver-etcd-client.key"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("failed to write key file: %v", err)
+	}
 
 	r := NewBottlerocketRenewer(tmp)
 	if err := r.TransferCertsToControlPlane(context.Background(), "cp", mocks.NewMockSSHRunner(ctrl)); err == nil {
@@ -63,8 +72,12 @@ func TestBR_TransferCerts_ReadKeyError(t *testing.T) {
 
 	tmp := t.TempDir()
 	local := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.MkdirAll(local, 0o700)
-	os.WriteFile(filepath.Join(local, "apiserver-etcd-client.crt"), []byte("crt"), 0o600)
+	if err := os.MkdirAll(local, 0o700); err != nil {
+		t.Fatalf("failed to create directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(local, "apiserver-etcd-client.crt"), []byte("crt"), 0o600); err != nil {
+		t.Fatalf("failed to write certificate file: %v", err)
+	}
 
 	r := NewBottlerocketRenewer(tmp)
 	if err := r.TransferCertsToControlPlane(context.Background(), "cp", mocks.NewMockSSHRunner(ctrl)); err == nil {
@@ -192,7 +205,10 @@ func TestBR_CopyEtcdCerts_LocalDirCreateFail(t *testing.T) {
 	tmp := t.TempDir()
 
 	bad := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	os.WriteFile(bad, []byte("x"), 0o600)
+	// os.WriteFile(bad, []byte("x"), 0o600)
+	if err := os.WriteFile(bad, []byte("x"), 0o600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
 
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := NewBottlerocketRenewer(tmp)
@@ -267,7 +283,7 @@ func TestBR_RenewEtcdCerts_ValidateError(t *testing.T) {
 	}
 }
 
-func TestBR_RenewCP_NoEtcd_SheltieFail(t *testing.T) {
+func TestBR_RenewCP_NoEtcd_ShellCommandError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
