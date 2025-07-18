@@ -380,10 +380,9 @@ func TestPopulateConfig_EtcdListError(t *testing.T) {
 			return nil
 		})
 
-	expectedErr := errors.New("etcd list error")
 	k.EXPECT().
 		List(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(expectedErr)
+		Return(errors.New("etcd list error"))
 
 	cfg := &RenewalConfig{
 		ClusterName: clusterLabel,
@@ -404,10 +403,9 @@ func Test_getControlPlaneIPs_ListError(t *testing.T) {
 
 	k := kubemocks.NewMockClient(ctrl)
 
-	expectedErr := errors.New("api server unavailable")
 	k.EXPECT().
 		List(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(expectedErr)
+		Return(errors.New("api server unavailable"))
 
 	if _, err := getControlPlaneIPs(context.Background(), k, &types.Cluster{Name: clusterLabel}); err == nil {
 		t.Fatalf("getControlPlaneIPs() expected error, got nil")
