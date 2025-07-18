@@ -205,7 +205,6 @@ func TestBR_CopyEtcdCerts_LocalDirCreateFail(t *testing.T) {
 	tmp := t.TempDir()
 
 	bad := filepath.Join(tmp, tempLocalEtcdCertsDir)
-	// os.WriteFile(bad, []byte("x"), 0o600)
 	if err := os.WriteFile(bad, []byte("x"), 0o600); err != nil {
 		t.Fatalf("failed to write file: %v", err)
 	}
