@@ -1,577 +1,677 @@
-package certificates_test
+package certificates
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
+	"strings"
 	"testing"
-	"time"
-	"unsafe"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/golang/mock/gomock"
-	"github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
-	"github.com/aws/eks-anywhere/pkg/certificates"
 	"github.com/aws/eks-anywhere/pkg/certificates/mocks"
-	"github.com/aws/eks-anywhere/pkg/clients/kubernetes"
 	kubemocks "github.com/aws/eks-anywhere/pkg/clients/kubernetes/mocks"
 )
 
-// Test helper functions
-func newTestKubernetesClient() kubernetes.Client {
-	ctrl := gomock.NewController(nil)
-	return kubemocks.NewMockClient(ctrl)
-}
-
-// newTestRenewerWithMockSSH creates a Renewer instance with mock SSH runners for testing
-func newTestRenewerWithMockSSH(t *testing.T, kubectl kubernetes.Client, osType string, cfg *certificates.RenewalConfig) (*certificates.Renewer, *mocks.MockSSHRunner, *mocks.MockSSHRunner) {
+func TestNewRenewerSuccess(t *testing.T) {
 	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
 
-	mockSSHEtcd := mocks.NewMockSSHRunner(ctrl)
-	mockSSHControlPlane := mocks.NewMockSSHRunner(ctrl)
-
-	// Create a test renewer using reflection to bypass the SSH creation
-	ts := time.Now().Format("2006-01-02T15_04_05")
-	backupDir := "certificate_backup_" + ts
-
-	// Create backup directory
-	err := os.MkdirAll(filepath.Join(backupDir, "etcd-client-certs"), 0o755)
-	if err != nil {
-		t.Fatalf("Failed to create backup directory: %v", err)
-	}
-
-	osRenewer := certificates.BuildOSRenewer(osType, backupDir)
-
-	// Use reflection to create the Renewer struct directly
-	renewer := &certificates.Renewer{}
-
-	// Set the fields using reflection with proper field access
-	v := reflect.ValueOf(renewer).Elem()
-
-	// Set backupDir field
-	backupDirField := v.FieldByName("backupDir")
-	if backupDirField.IsValid() && backupDirField.CanSet() {
-		backupDirField.SetString(backupDir)
-	} else {
-		// Use unsafe reflection to set unexported field
-		backupDirField = reflect.NewAt(backupDirField.Type(), unsafe.Pointer(backupDirField.UnsafeAddr())).Elem()
-		backupDirField.SetString(backupDir)
-	}
-
-	// Set kubectl field
-	kubectlField := v.FieldByName("kubectl")
-	if kubectlField.IsValid() && kubectlField.CanSet() {
-		kubectlField.Set(reflect.ValueOf(kubectl))
-	} else {
-		kubectlField = reflect.NewAt(kubectlField.Type(), unsafe.Pointer(kubectlField.UnsafeAddr())).Elem()
-		kubectlField.Set(reflect.ValueOf(kubectl))
-	}
-
-	// Set os field
-	osField := v.FieldByName("os")
-	if osField.IsValid() && osField.CanSet() {
-		osField.Set(reflect.ValueOf(osRenewer))
-	} else {
-		osField = reflect.NewAt(osField.Type(), unsafe.Pointer(osField.UnsafeAddr())).Elem()
-		osField.Set(reflect.ValueOf(osRenewer))
-	}
-
-	// Set SSH runners based on configuration
-	if len(cfg.Etcd.Nodes) > 0 {
-		sshEtcdField := v.FieldByName("sshEtcd")
-		if sshEtcdField.IsValid() && sshEtcdField.CanSet() {
-			sshEtcdField.Set(reflect.ValueOf(mockSSHEtcd))
-		} else {
-			sshEtcdField = reflect.NewAt(sshEtcdField.Type(), unsafe.Pointer(sshEtcdField.UnsafeAddr())).Elem()
-			sshEtcdField.Set(reflect.ValueOf(mockSSHEtcd))
-		}
-	}
-
-	sshControlPlaneField := v.FieldByName("sshControlPlane")
-	if sshControlPlaneField.IsValid() && sshControlPlaneField.CanSet() {
-		sshControlPlaneField.Set(reflect.ValueOf(mockSSHControlPlane))
-	} else {
-		sshControlPlaneField = reflect.NewAt(sshControlPlaneField.Type(), unsafe.Pointer(sshControlPlaneField.UnsafeAddr())).Elem()
-		sshControlPlaneField.Set(reflect.ValueOf(mockSSHControlPlane))
-	}
-
-	return renewer, mockSSHEtcd, mockSSHControlPlane
-}
-
-func TestNewRenewer(t *testing.T) {
-	g := gomega.NewWithT(t)
-
-	config := &certificates.RenewalConfig{
+	cfg := &RenewalConfig{
 		ClusterName: "test-cluster",
-		OS:          string(v1alpha1.Ubuntu),
-		ControlPlane: certificates.NodeConfig{
-			Nodes: []string{"192.168.1.20"},
-			SSH: certificates.SSHConfig{
-				User:    "ubuntu",
-				KeyPath: "/nonexistent/key/path",
+		OS:          string(OSTypeLinux),
+		ControlPlane: NodeConfig{
+			Nodes: []string{
+				"0.0.0.0",
+			},
+			SSH: SSHConfig{
+				User:    "XXXX",
+				KeyPath: "test",
 			},
 		},
 	}
 
-	client := newTestKubernetesClient()
+	osRenewer := BuildOSRenewer(cfg.OS, t.TempDir())
 
-	// Mimic the CLI layer mapping logic
-	osType := config.OS
-	if osType == string(v1alpha1.Ubuntu) || osType == string(v1alpha1.RedHat) {
-		osType = string(certificates.OSTypeLinux)
+	sshEtcd := mocks.NewMockSSHRunner(ctrl)
+	sshCP := mocks.NewMockSSHRunner(ctrl)
+	kubeClient := kubemocks.NewMockClient(ctrl)
+
+	sshCP.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return("", nil).
+		AnyTimes()
+
+	sshEtcd.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return("", nil).
+		AnyTimes()
+
+	kubeClient.EXPECT().
+		Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(apierrors.NewNotFound(schema.GroupResource{}, "")).
+		AnyTimes()
+
+	renewer := &Renewer{
+		backupDir:       t.TempDir(),
+		kubectl:         kubeClient,
+		os:              osRenewer,
+		sshEtcd:         sshEtcd,
+		sshControlPlane: sshCP,
 	}
 
-	// This test expects to fail because SSH key file doesn't exist
-	_, err := certificates.NewRenewer(client, osType, config)
+	err := renewer.RenewCertificates(context.Background(), cfg, "etcd")
 
-	g.Expect(err).To(gomega.HaveOccurred())
-	g.Expect(err.Error()).To(gomega.ContainSubstring("no such file or directory"))
-}
-
-func TestRenewer_RenewCertificates_Success(t *testing.T) {
-	tests := []struct {
-		name      string
-		config    *certificates.RenewalConfig
-		component string
-	}{
-		{
-			name: "successful certificate renewal with external etcd",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          string(v1alpha1.Ubuntu),
-				Etcd: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.10", "192.168.1.11"},
-					SSH: certificates.SSHConfig{
-						User:    "ubuntu",
-						KeyPath: "/tmp/test-key",
-					},
-				},
-				ControlPlane: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.20"},
-					SSH: certificates.SSHConfig{
-						User:    "ubuntu",
-						KeyPath: "/tmp/test-key",
-					},
-				},
-			},
-			component: "",
-		},
-		{
-			name: "successful certificate renewal with stacked etcd",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          string(v1alpha1.Bottlerocket),
-				ControlPlane: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.20", "192.168.1.21"},
-					SSH: certificates.SSHConfig{
-						User:    "ec2-user",
-						KeyPath: "/tmp/test-key",
-					},
-				},
-			},
-			component: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := gomega.NewWithT(t)
-			ctx := context.Background()
-
-			client := newTestKubernetesClient()
-
-			// Mimic the CLI layer mapping logic
-			osType := tt.config.OS
-			if osType == string(v1alpha1.Ubuntu) || osType == string(v1alpha1.RedHat) {
-				osType = string(certificates.OSTypeLinux)
-			}
-
-			// Create renewer with mock SSH runners
-			renewer, mockSSHEtcd, mockSSHControlPlane := newTestRenewerWithMockSSH(t, client, osType, tt.config)
-
-			// Get backup directory for cleanup
-			ts := time.Now().Format("2006-01-02T15_04_05")
-			backupDir := "certificate_backup_" + ts
-			defer os.RemoveAll(backupDir) // Clean up test backup directory
-
-			// Set up mock expectations for SSH commands
-			if len(tt.config.Etcd.Nodes) > 0 {
-				// Mock etcd certificate renewal commands
-				for _, node := range tt.config.Etcd.Nodes {
-					mockSSHEtcd.EXPECT().
-						RunCommand(ctx, node, gomock.Any()).
-						Return("success", nil).
-						AnyTimes()
-				}
-				// Mock copying certificates from first etcd node
-				mockSSHEtcd.EXPECT().
-					RunCommand(ctx, tt.config.Etcd.Nodes[0], gomock.Any()).
-					Return("success", nil).
-					AnyTimes()
-			}
-
-			// Mock control plane certificate renewal commands
-			for _, node := range tt.config.ControlPlane.Nodes {
-				mockSSHControlPlane.EXPECT().
-					RunCommand(ctx, node, gomock.Any()).
-					Return("success", nil).
-					AnyTimes()
-			}
-
-			g.Expect(renewer).ToNot(gomega.BeNil())
-		})
+	if err != nil {
+		t.Fatalf("RenewCertificates() expected no error, got: %v", err)
 	}
 }
 
-func TestRenewer_RenewCertificates_SSHKeyErrors(t *testing.T) {
-	tests := []struct {
-		name      string
-		config    *certificates.RenewalConfig
-		component string
-	}{
-		{
-			name: "fails with external etcd when SSH key file doesn't exist",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          string(v1alpha1.Ubuntu),
-				Etcd: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.10", "192.168.1.11"},
-					SSH: certificates.SSHConfig{
-						User:    "ubuntu",
-						KeyPath: "/nonexistent/key/path",
-					},
-				},
-				ControlPlane: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.20"},
-					SSH: certificates.SSHConfig{
-						User:    "ubuntu",
-						KeyPath: "/nonexistent/key/path",
-					},
-				},
-			},
-			component: "",
-		},
-		{
-			name: "fails with stacked etcd when SSH key file doesn't exist",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          string(v1alpha1.Bottlerocket),
-				ControlPlane: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.20", "192.168.1.21"},
-					SSH: certificates.SSHConfig{
-						User:    "ec2-user",
-						KeyPath: "/nonexistent/key/path",
-					},
-				},
-			},
-			component: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := gomega.NewWithT(t)
-
-			client := newTestKubernetesClient()
-
-			// Mimic the CLI layer mapping logic
-			osType := tt.config.OS
-			if osType == string(v1alpha1.Ubuntu) || osType == string(v1alpha1.RedHat) {
-				osType = string(certificates.OSTypeLinux)
-			}
-
-			// This should fail because SSH key file doesn't exist
-			_, err := certificates.NewRenewer(client, osType, tt.config)
-			g.Expect(err).To(gomega.HaveOccurred())
-			g.Expect(err.Error()).To(gomega.ContainSubstring("no such file or directory"))
-		})
-	}
-}
-
-func TestRenewer_RenewCertificates_ValidationErrors(t *testing.T) {
-	tests := []struct {
-		name          string
-		config        *certificates.RenewalConfig
-		component     string
-		expectedError string
-	}{
-		{
-			name: "empty cluster name",
-			config: &certificates.RenewalConfig{
-				ClusterName: "",
-				OS:          string(v1alpha1.Ubuntu),
-			},
-			component:     "",
-			expectedError: "clusterName is required",
-		},
-		{
-			name: "invalid OS type",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          "invalid-os",
-			},
-			component:     "",
-			expectedError: "unsupported os",
-		},
-		{
-			name: "no control plane nodes",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          string(v1alpha1.Ubuntu),
-				ControlPlane: certificates.NodeConfig{
-					Nodes: []string{},
-				},
-			},
-			component:     "",
-			expectedError: "nodes list cannot be empty",
-		},
-		{
-			name: "missing SSH user",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          string(v1alpha1.Ubuntu),
-				ControlPlane: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.20"},
-					SSH: certificates.SSHConfig{
-						KeyPath: "/tmp/test-key",
-					},
-				},
-			},
-			component:     "",
-			expectedError: "sshUser is required",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := gomega.NewWithT(t)
-
-			err := certificates.ValidateConfig(tt.config, tt.component)
-			g.Expect(err).To(gomega.HaveOccurred())
-			g.Expect(err.Error()).To(gomega.ContainSubstring(tt.expectedError))
-		})
-	}
-}
-
-func TestSSHRunner_RunCommand_Success(t *testing.T) {
-	g := gomega.NewWithT(t)
-	ctx := context.Background()
+func TestRenewEtcdCerts(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	t.Cleanup(ctrl.Finish)
 
-	mockSSH := mocks.NewMockSSHRunner(ctrl)
-	mockSSH.EXPECT().
-		RunCommand(ctx, "192.168.1.10", "echo 'test'").
-		Return("test", nil).
-		Times(1)
+	cfg := &RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          string(OSTypeLinux),
+		Etcd: NodeConfig{
+			Nodes: []string{"etcd-1"},
+		},
+		ControlPlane: NodeConfig{
+			Nodes: []string{
+				"0.0.0.0",
+			},
+			SSH: SSHConfig{
+				User:    "XXXX",
+				KeyPath: "test",
+			},
+		},
+	}
 
-	output, err := mockSSH.RunCommand(ctx, "192.168.1.10", "echo 'test'")
-	g.Expect(err).ToNot(gomega.HaveOccurred())
-	g.Expect(output).To(gomega.Equal("test"))
+	osRenewer := BuildOSRenewer(cfg.OS, t.TempDir())
+
+	sshEtcd := mocks.NewMockSSHRunner(ctrl)
+	expectedErr := fmt.Errorf("backing up etcd certs error")
+	sshEtcd.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return("", expectedErr).
+		AnyTimes()
+
+	sshCP := mocks.NewMockSSHRunner(ctrl)
+	kubeClient := kubemocks.NewMockClient(ctrl)
+
+	renewer := &Renewer{
+		backupDir:       t.TempDir(),
+		kubectl:         kubeClient,
+		os:              osRenewer,
+		sshEtcd:         sshEtcd,
+		sshControlPlane: sshCP,
+	}
+	err := renewer.renewEtcdCerts(context.Background(), cfg)
+
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "backing up etcd certs") {
+		t.Fatalf("expected error containing 'backing up etcd certs', got: %v", err)
+	}
 }
 
-func TestSSHRunner_RunCommand_Error(t *testing.T) {
-	g := gomega.NewWithT(t)
-	ctx := context.Background()
+func TestRenewEtcdCertsFailure(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	t.Cleanup(ctrl.Finish)
 
-	mockSSH := mocks.NewMockSSHRunner(ctrl)
-	mockSSH.EXPECT().
-		RunCommand(ctx, "192.168.1.10", "invalid-command").
-		Return("", errors.New("command failed")).
-		Times(1)
-
-	_, err := mockSSH.RunCommand(ctx, "192.168.1.10", "invalid-command")
-	g.Expect(err).To(gomega.HaveOccurred())
-	g.Expect(err.Error()).To(gomega.ContainSubstring("command failed"))
-}
-
-// TestRenewer_RenewCertificates_FullFlow tests the complete certificate renewal flow
-func TestRenewer_RenewCertificates_FullFlow(t *testing.T) {
-	tests := []struct {
-		name      string
-		config    *certificates.RenewalConfig
-		component string
-	}{
-		{
-			name: "certificate renewal flow validation with external etcd",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          string(v1alpha1.Ubuntu),
-				Etcd: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.10", "192.168.1.11"},
-					SSH: certificates.SSHConfig{
-						User:    "ubuntu",
-						KeyPath: "/tmp/test-key",
-					},
-				},
-				ControlPlane: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.20"},
-					SSH: certificates.SSHConfig{
-						User:    "ubuntu",
-						KeyPath: "/tmp/test-key",
-					},
-				},
-			},
-			component: "",
-		},
-		{
-			name: "certificate renewal flow validation with stacked etcd",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          string(v1alpha1.Bottlerocket),
-				ControlPlane: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.20", "192.168.1.21"},
-					SSH: certificates.SSHConfig{
-						User:    "ec2-user",
-						KeyPath: "/tmp/test-key",
-					},
-				},
-			},
-			component: "",
+	cfg := &RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          string(OSTypeLinux),
+		Etcd: NodeConfig{
+			Nodes: []string{"etcd-1"},
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := gomega.NewWithT(t)
-			ctx := context.Background()
+	osRenewer := BuildOSRenewer(cfg.OS, t.TempDir())
 
-			client := newTestKubernetesClient()
+	sshEtcd := mocks.NewMockSSHRunner(ctrl)
+	expectedErr := fmt.Errorf("renew etcd error")
+	sshEtcd.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return("", expectedErr).
+		AnyTimes()
 
-			// Mimic the CLI layer mapping logic
-			osType := tt.config.OS
-			if osType == string(v1alpha1.Ubuntu) || osType == string(v1alpha1.RedHat) {
-				osType = string(certificates.OSTypeLinux)
+	renewer := &Renewer{
+		backupDir: t.TempDir(),
+		os:        osRenewer,
+		sshEtcd:   sshEtcd,
+	}
+
+	err := renewer.renewEtcdCerts(context.Background(), cfg)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "renewing certificates for etcd node") {
+		t.Fatalf("expected error containing 'renewing certificates for etcd node', got: %v", err)
+	}
+}
+
+func TestRenewEtcdCertsSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	cfg := &RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          string(OSTypeLinux),
+		Etcd: NodeConfig{
+			Nodes: []string{"etcd-1"},
+		},
+	}
+
+	osRenewer := BuildOSRenewer(cfg.OS, t.TempDir())
+
+	sshEtcd := mocks.NewMockSSHRunner(ctrl)
+	sshEtcd.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, node, cmd string) (string, error) {
+			if strings.Contains(cmd, "cat") && strings.Contains(cmd, "apiserver-etcd-client.crt") {
+				return "dummy-cert-content", nil
 			}
-
-			// Create renewer with mock SSH runners
-			renewer, mockSSHEtcd, mockSSHControlPlane := newTestRenewerWithMockSSH(t, client, osType, tt.config)
-
-			// Get backup directory for cleanup
-			ts := time.Now().Format("2006-01-02T15_04_05")
-			backupDir := "certificate_backup_" + ts
-			defer os.RemoveAll(backupDir) // Clean up test backup directory
-
-			// Set up mock expectations for SSH commands
-			if len(tt.config.Etcd.Nodes) > 0 {
-				// Mock etcd certificate renewal commands
-				for _, node := range tt.config.Etcd.Nodes {
-					mockSSHEtcd.EXPECT().
-						RunCommand(ctx, node, gomock.Any()).
-						Return("success", nil).
-						AnyTimes()
-				}
-				// Mock copying certificates from first etcd node
-				mockSSHEtcd.EXPECT().
-					RunCommand(ctx, tt.config.Etcd.Nodes[0], gomock.Any()).
-					Return("success", nil).
-					AnyTimes()
+			if strings.Contains(cmd, "cat") && strings.Contains(cmd, "apiserver-etcd-client.key") {
+				return "dummy-key-content", nil
 			}
+			return "", nil
+		}).
+		AnyTimes()
 
-			// Mock control plane certificate renewal commands
-			for _, node := range tt.config.ControlPlane.Nodes {
-				mockSSHControlPlane.EXPECT().
-					RunCommand(ctx, node, gomock.Any()).
-					Return("success", nil).
-					AnyTimes()
+	renewer := &Renewer{
+		backupDir: t.TempDir(),
+		os:        osRenewer,
+		sshEtcd:   sshEtcd,
+	}
+
+	err := renewer.renewEtcdCerts(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestRenewControlPlaneCertsSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	cfg := &RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          string(OSTypeLinux),
+		ControlPlane: NodeConfig{
+			Nodes: []string{"cp-1"},
+		},
+	}
+
+	osRenewer := BuildOSRenewer(cfg.OS, t.TempDir())
+
+	sshCP := mocks.NewMockSSHRunner(ctrl)
+	sshCP.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return("", nil).
+		AnyTimes()
+
+	renewer := &Renewer{
+		backupDir:       t.TempDir(),
+		os:              osRenewer,
+		sshControlPlane: sshCP,
+	}
+
+	err := renewer.renewControlPlaneCerts(context.Background(), cfg, "control-plane")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestRenewControlPlaneCertsFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	cfg := &RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          string(OSTypeLinux),
+		ControlPlane: NodeConfig{
+			Nodes: []string{"cp-1"},
+		},
+	}
+
+	osRenewer := BuildOSRenewer(cfg.OS, t.TempDir())
+
+	sshCP := mocks.NewMockSSHRunner(ctrl)
+	expectedErr := fmt.Errorf("renew control plane error")
+	sshCP.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return("", expectedErr).
+		AnyTimes()
+
+	renewer := &Renewer{
+		backupDir:       t.TempDir(),
+		os:              osRenewer,
+		sshControlPlane: sshCP,
+	}
+
+	err := renewer.renewControlPlaneCerts(context.Background(), cfg, "control-plane")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "renewing certificates for control-plane node") {
+		t.Fatalf("expected error containing 'renewing certificates for control-plane node', got: %v", err)
+	}
+}
+
+func TestRenewCertificates_RenewControlPlaneCertsError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	cfg := &RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          string(OSTypeLinux),
+		ControlPlane: NodeConfig{
+			Nodes: []string{
+				"0.0.0.0",
+			},
+			SSH: SSHConfig{
+				User:    "XXXX",
+				KeyPath: "test",
+			},
+		},
+	}
+
+	osRenewer := BuildOSRenewer(cfg.OS, t.TempDir())
+
+	sshEtcd := mocks.NewMockSSHRunner(ctrl)
+	sshCP := mocks.NewMockSSHRunner(ctrl)
+	kubeClient := kubemocks.NewMockClient(ctrl)
+
+	expectedErr := fmt.Errorf("backing up control plane certs error")
+	sshCP.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return("", expectedErr).
+		AnyTimes()
+
+	renewer := &Renewer{
+		backupDir:       t.TempDir(),
+		kubectl:         kubeClient,
+		os:              osRenewer,
+		sshEtcd:         sshEtcd,
+		sshControlPlane: sshCP,
+	}
+
+	err := renewer.RenewCertificates(context.Background(), cfg, "control-plane")
+
+	if err == nil {
+		t.Fatalf("RenewCertificates() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "backing up control plane certs") {
+		t.Fatalf("expected error containing 'backing up control plane certs', got: %v", err)
+	}
+}
+
+func TestRenewCertificates_UpdateAPIServerEtcdClientSecretError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	cfg := &RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          string(OSTypeLinux),
+		Etcd: NodeConfig{
+			Nodes: []string{
+				"etcd-1",
+			},
+		},
+		ControlPlane: NodeConfig{
+			Nodes: []string{
+				"0.0.0.0",
+			},
+			SSH: SSHConfig{
+				User:    "XXXX",
+				KeyPath: "test",
+			},
+		},
+	}
+
+	osRenewer := BuildOSRenewer(cfg.OS, t.TempDir())
+
+	sshEtcd := mocks.NewMockSSHRunner(ctrl)
+	sshCP := mocks.NewMockSSHRunner(ctrl)
+	kubeClient := kubemocks.NewMockClient(ctrl)
+
+	sshEtcd.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, node, cmd string) (string, error) {
+			if strings.Contains(cmd, "sudo cat /etc/etcd/pki/apiserver-etcd-client.crt") {
+				return "certificate content", nil
 			}
+			if strings.Contains(cmd, "sudo cat /etc/etcd/pki/apiserver-etcd-client.key") {
+				return "key content", nil
+			}
+			return "", nil
+		}).
+		AnyTimes()
 
-			g.Expect(renewer).ToNot(gomega.BeNil())
+	sshCP.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return("", nil).
+		AnyTimes()
+
+	kubeClient.EXPECT().
+		Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, obj interface{}) error {
+			secret := obj.(*corev1.Secret)
+			secret.Data = map[string][]byte{}
+			return nil
+		}).
+		AnyTimes()
+
+	expectedErr := fmt.Errorf("updating secret error")
+	kubeClient.EXPECT().
+		Update(gomock.Any(), gomock.Any()).
+		Return(expectedErr).
+		AnyTimes()
+
+	renewer := &Renewer{
+		backupDir:       t.TempDir(),
+		kubectl:         kubeClient,
+		os:              osRenewer,
+		sshEtcd:         sshEtcd,
+		sshControlPlane: sshCP,
+	}
+
+	writeDummyEtcdCerts(t, renewer.backupDir)
+
+	err := renewer.RenewCertificates(context.Background(), cfg, "etcd")
+
+	if err == nil {
+		t.Fatalf("RenewCertificates() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "updating secret") {
+		t.Fatalf("expected error containing 'updating secret', got: %v", err)
+	}
+}
+
+func TestRenewCertificates_CopyEtcdCertsError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	cfg := &RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          string(OSTypeLinux),
+		Etcd: NodeConfig{
+			Nodes: []string{
+				"etcd-1",
+			},
+		},
+		ControlPlane: NodeConfig{
+			Nodes: []string{
+				"0.0.0.0",
+			},
+			SSH: SSHConfig{
+				User:    "XXXX",
+				KeyPath: "test",
+			},
+		},
+	}
+
+	osRenewer := BuildOSRenewer(cfg.OS, t.TempDir())
+
+	sshEtcd := mocks.NewMockSSHRunner(ctrl)
+	sshCP := mocks.NewMockSSHRunner(ctrl)
+	kubeClient := kubemocks.NewMockClient(ctrl)
+
+	callCount := 0
+	sshEtcd.EXPECT().
+		RunCommand(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, node, cmd string) (string, error) {
+			callCount++
+			if callCount <= 3 {
+				return "", nil
+			}
+			return "", fmt.Errorf("copy etcd certs error")
+		}).
+		AnyTimes()
+
+	renewer := &Renewer{
+		backupDir:       t.TempDir(),
+		kubectl:         kubeClient,
+		os:              osRenewer,
+		sshEtcd:         sshEtcd,
+		sshControlPlane: sshCP,
+	}
+
+	err := renewer.RenewCertificates(context.Background(), cfg, "etcd")
+
+	if err == nil {
+		t.Fatalf("RenewCertificates() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "copying certificates from etcd node") {
+		t.Fatalf("expected error containing 'copying certificates from etcd node', got: %v", err)
+	}
+}
+
+func TestUpdateAPIServerEtcdClientSecret_ReadCertificateFileError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	kubeClient := kubemocks.NewMockClient(ctrl)
+
+	renewer := &Renewer{
+		backupDir: t.TempDir(),
+		kubectl:   kubeClient,
+	}
+
+	err := renewer.updateAPIServerEtcdClientSecret(context.Background(), "test-cluster")
+
+	if err == nil {
+		t.Fatalf("updateAPIServerEtcdClientSecret() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "read certificate file") {
+		t.Fatalf("expected error containing 'read certificate file', got: %v", err)
+	}
+}
+
+func TestUpdateAPIServerEtcdClientSecret_SecretNotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	kubeClient := kubemocks.NewMockClient(ctrl)
+
+	kubeClient.EXPECT().
+		Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(apierrors.NewNotFound(schema.GroupResource{}, "")).
+		AnyTimes()
+
+	renewer := &Renewer{
+		backupDir: t.TempDir(),
+		kubectl:   kubeClient,
+	}
+
+	writeDummyEtcdCerts(t, renewer.backupDir)
+
+	err := renewer.updateAPIServerEtcdClientSecret(context.Background(), "test-cluster")
+
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestUpdateAPIServerEtcdClientSecret_GetError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	kubeClient := kubemocks.NewMockClient(ctrl)
+
+	kubeClient.EXPECT().
+		Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(fmt.Errorf("get error")).
+		AnyTimes()
+
+	renewer := &Renewer{
+		backupDir: t.TempDir(),
+		kubectl:   kubeClient,
+	}
+
+	writeDummyEtcdCerts(t, renewer.backupDir)
+
+	err := renewer.updateAPIServerEtcdClientSecret(context.Background(), "test-cluster")
+
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestUpdateAPIServerEtcdClientSecret_ReadKeyFileError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	kubeClient := kubemocks.NewMockClient(ctrl)
+
+	renewer := &Renewer{
+		backupDir: t.TempDir(),
+		kubectl:   kubeClient,
+	}
+
+	dir := filepath.Join(renewer.backupDir, tempLocalEtcdCertsDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("creating directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "apiserver-etcd-client.crt"), []byte("cert"), 0o644); err != nil {
+		t.Fatalf("writing crt: %v", err)
+	}
+
+	err := renewer.updateAPIServerEtcdClientSecret(context.Background(), "test-cluster")
+
+	if err == nil {
+		t.Fatalf("updateAPIServerEtcdClientSecret() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "read key file") {
+		t.Fatalf("expected error containing 'read key file', got: %v", err)
+	}
+}
+
+func TestUpdateAPIServerEtcdClientSecret_SuccessfulUpdate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	kubeClient := kubemocks.NewMockClient(ctrl)
+
+	kubeClient.EXPECT().
+		Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, obj interface{}) error {
+			secret := obj.(*corev1.Secret)
+			secret.Data = map[string][]byte{}
+			return nil
 		})
+
+	kubeClient.EXPECT().
+		Update(gomock.Any(), gomock.Any()).
+		Return(nil)
+
+	renewer := &Renewer{
+		backupDir: t.TempDir(),
+		kubectl:   kubeClient,
+	}
+
+	writeDummyEtcdCerts(t, renewer.backupDir)
+
+	err := renewer.updateAPIServerEtcdClientSecret(context.Background(), "test-cluster")
+
+	if err != nil {
+		t.Fatalf("updateAPIServerEtcdClientSecret() expected no error, got: %v", err)
 	}
 }
 
-func TestRenewer_RenewCertificates_SSHErrors(t *testing.T) {
+func TestCleanup_RemoveAllError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	renewer := &Renewer{
+		backupDir: "/non-existent-dir",
+	}
+
+	renewer.cleanup()
+
+}
+
+func writeDummyEtcdCerts(t *testing.T, backupDir string) {
+	t.Helper()
+
+	dir := filepath.Join(backupDir, tempLocalEtcdCertsDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("creating directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "apiserver-etcd-client.crt"), []byte("cert"), 0o644); err != nil {
+		t.Fatalf("writing crt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "apiserver-etcd-client.key"), []byte("key"), 0o644); err != nil {
+		t.Fatalf("writing key: %v", err)
+	}
+}
+
+func TestValidateRenewalConfig(t *testing.T) {
 	tests := []struct {
 		name      string
-		config    *certificates.RenewalConfig
+		config    *RenewalConfig
 		component string
-		setupMock func(*mocks.MockSSHRunner, *mocks.MockSSHRunner, context.Context, *certificates.RenewalConfig)
+		wantEtcd  bool
+		wantCP    bool
+		wantErr   string
 	}{
 		{
-			name: "etcd SSH command failure",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          string(v1alpha1.Ubuntu),
-				Etcd: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.10"},
-					SSH: certificates.SSHConfig{
-						User:    "ubuntu",
-						KeyPath: "/tmp/test-key",
-					},
-				},
-				ControlPlane: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.20"},
-					SSH: certificates.SSHConfig{
-						User:    "ubuntu",
-						KeyPath: "/tmp/test-key",
-					},
-				},
+			name:      "valid etcd",
+			component: "etcd",
+			config: &RenewalConfig{
+				Etcd: NodeConfig{Nodes: []string{"etcd-1"}},
 			},
-			component: "",
-			setupMock: func(mockSSHEtcd, mockSSHControlPlane *mocks.MockSSHRunner, ctx context.Context, cfg *certificates.RenewalConfig) {
-				mockSSHEtcd.EXPECT().
-					RunCommand(ctx, cfg.Etcd.Nodes[0], gomock.Any()).
-					Return("", errors.New("SSH connection failed")).
-					Times(1)
-			},
+			wantEtcd: true,
+			wantCP:   true,
 		},
 		{
-			name: "control plane SSH command failure",
-			config: &certificates.RenewalConfig{
-				ClusterName: "test-cluster",
-				OS:          string(v1alpha1.Bottlerocket),
-				ControlPlane: certificates.NodeConfig{
-					Nodes: []string{"192.168.1.20"},
-					SSH: certificates.SSHConfig{
-						User:    "ec2-user",
-						KeyPath: "/tmp/test-key",
-					},
-				},
+			name:      "valid control-plane",
+			component: "control-plane",
+			config: &RenewalConfig{
+				ControlPlane: NodeConfig{Nodes: []string{"cp-1"}},
 			},
-			component: "",
-			setupMock: func(mockSSHEtcd, mockSSHControlPlane *mocks.MockSSHRunner, ctx context.Context, cfg *certificates.RenewalConfig) {
-				mockSSHControlPlane.EXPECT().
-					RunCommand(ctx, cfg.ControlPlane.Nodes[0], gomock.Any()).
-					Return("", errors.New("SSH connection failed")).
-					Times(1)
-			},
+			wantEtcd: false,
+			wantCP:   true,
+		},
+		{
+			name:      "no etcd nodes",
+			component: "etcd",
+			config:    &RenewalConfig{},
+			wantEtcd:  false,
+			wantCP:    true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := gomega.NewWithT(t)
-			ctx := context.Background()
-
-			client := newTestKubernetesClient()
-
-			// Mimic the CLI layer mapping logic
-			osType := tt.config.OS
-			if osType == string(v1alpha1.Ubuntu) || osType == string(v1alpha1.RedHat) {
-				osType = string(certificates.OSTypeLinux)
+			renewer := &Renewer{}
+			processEtcd, processControlPlane, err := renewer.validateRenewalConfig(tt.config, tt.component)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing '%s', got: %v", tt.wantErr, err)
+				}
+				return
 			}
-
-			// Create renewer with mock SSH runners
-			renewer, mockSSHEtcd, mockSSHControlPlane := newTestRenewerWithMockSSH(t, client, osType, tt.config)
-
-			// Get backup directory for cleanup
-			ts := time.Now().Format("2006-01-02T15_04_05")
-			backupDir := "certificate_backup_" + ts
-			defer os.RemoveAll(backupDir) // Clean up test backup directory
-
-			// Setup mock expectations
-			tt.setupMock(mockSSHEtcd, mockSSHControlPlane, ctx, tt.config)
-
-			// Test should fail due to SSH error
-			err := renewer.RenewCertificates(ctx, tt.config, tt.component)
-			g.Expect(err).To(gomega.HaveOccurred())
-			g.Expect(err.Error()).To(gomega.ContainSubstring("SSH connection failed"))
+			if err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if processEtcd != tt.wantEtcd {
+				t.Fatalf("expected processEtcd=%v, got: %v", tt.wantEtcd, processEtcd)
+			}
+			if processControlPlane != tt.wantCP {
+				t.Fatalf("expected processControlPlane=%v, got: %v", tt.wantCP, processControlPlane)
+			}
 		})
 	}
 }
