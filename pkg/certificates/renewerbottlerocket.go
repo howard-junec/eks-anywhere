@@ -89,7 +89,7 @@ func (b *BottlerocketRenewer) TransferCertsToControlPlane(
 		b.writeKeyToTemp(base64.StdEncoding.EncodeToString(keyBytes)),
 	)
 
-	if _, err := ssh.RunCommand(ctx, node, shellCommands); err != nil {
+	if _, err := ssh.RunCommand(ctx, node, shellCommands, WithSSHLogging(false)); err != nil {
 		return fmt.Errorf("transfering certificates to control plane: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func (b *BottlerocketRenewer) CopyEtcdCerts(ctx context.Context, node string, ss
 	}
 
 	certificatePath := filepath.Join(brTempDir, "apiserver-etcd-client.crt")
-	certificateContent, err := ssh.RunCommand(ctx, node, b.readTempFile(certificatePath))
+	certificateContent, err := ssh.RunCommand(ctx, node, b.readTempFile(certificatePath), WithSSHLogging(false))
 	if err != nil {
 		return fmt.Errorf("reading etcd certificate file: %v", err)
 	}
@@ -138,7 +138,7 @@ func (b *BottlerocketRenewer) CopyEtcdCerts(ctx context.Context, node string, ss
 	}
 
 	keyFilePath := filepath.Join(brTempDir, "apiserver-etcd-client.key")
-	keyContent, err := ssh.RunCommand(ctx, node, b.readTempFile(keyFilePath))
+	keyContent, err := ssh.RunCommand(ctx, node, b.readTempFile(keyFilePath), WithSSHLogging(false))
 	if err != nil {
 		return fmt.Errorf("reading etcd key file: %v", err)
 	}
