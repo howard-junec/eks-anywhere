@@ -11,14 +11,13 @@ import (
 
 	"github.com/aws/eks-anywhere/pkg/certificates"
 	"github.com/aws/eks-anywhere/pkg/certificates/mocks"
-	kubemocks "github.com/aws/eks-anywhere/pkg/clients/kubernetes/mocks"
 )
 
 var errString = fmt.Errorf("error")
 
-func TestRenewControlPlaneCertsWithRenewError(t *testing.T) {
+func TestLinuxRenewer_RenewControlPlaneCertsWithRenewError(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	t.Cleanup(ctrl.Finish)
+	defer ctrl.Finish()
 
 	cfg := &certificates.RenewalConfig{
 		ClusterName: "test-cluster",
@@ -28,33 +27,26 @@ func TestRenewControlPlaneCertsWithRenewError(t *testing.T) {
 		},
 	}
 
-	osRenewer := certificates.BuildOSRenewer(cfg.OS, t.TempDir())
 	ssh := mocks.NewMockSSHRunner(ctrl)
-	kubeClient := kubemocks.NewMockClient(ctrl)
+	r := certificates.NewLinuxRenewer(t.TempDir())
 
 	ssh.EXPECT().
-		RunCommand(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", nil)
 
 	ssh.EXPECT().
-		RunCommand(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	renewer := &certificates.Renewer{
-		BackupDir:       t.TempDir(),
-		Kubectl:         kubeClient,
-		OS:              osRenewer,
-		SSHControlPlane: ssh,
-	}
-
-	if err := renewer.RenewCertificates(context.Background(), cfg, "control-plane"); err == nil {
-		t.Fatalf("RenewCertificates() expected error, got nil")
+	err := r.RenewControlPlaneCerts(context.Background(), "cp-1", cfg, "", ssh)
+	if err == nil {
+		t.Fatalf("RenewControlPlaneCerts() expected error, got nil")
 	}
 }
 
-func TestRenewControlPlaneCertsWithExternalEtcdValidationError(t *testing.T) {
+func TestLinuxRenewer_RenewControlPlaneCertsWithValidationError(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	t.Cleanup(ctrl.Finish)
+	defer ctrl.Finish()
 
 	cfg := &certificates.RenewalConfig{
 		ClusterName: "test-cluster",
@@ -64,107 +56,70 @@ func TestRenewControlPlaneCertsWithExternalEtcdValidationError(t *testing.T) {
 		},
 	}
 
-	osRenewer := certificates.BuildOSRenewer(cfg.OS, t.TempDir())
 	ssh := mocks.NewMockSSHRunner(ctrl)
-	kubeClient := kubemocks.NewMockClient(ctrl)
+	r := certificates.NewLinuxRenewer(t.TempDir())
 
 	ssh.EXPECT().
-		RunCommand(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", nil)
 
 	ssh.EXPECT().
-		RunCommand(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", nil)
 
 	ssh.EXPECT().
-		RunCommand(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	renewer := &certificates.Renewer{
-		BackupDir:       t.TempDir(),
-		Kubectl:         kubeClient,
-		OS:              osRenewer,
-		SSHControlPlane: ssh,
-	}
-
-	if err := renewer.RenewCertificates(context.Background(), cfg, "control-plane"); err == nil {
-		t.Fatalf("RenewCertificates() expected error, got nil")
+	err := r.RenewControlPlaneCerts(context.Background(), "cp-1", cfg, "", ssh)
+	if err == nil {
+		t.Fatalf("RenewControlPlaneCerts() expected error, got nil")
 	}
 }
 
-func TestRenewEtcdCertsWithJoinError(t *testing.T) {
+func TestLinuxRenewer_RenewEtcdCertsWithJoinError(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	t.Cleanup(ctrl.Finish)
+	defer ctrl.Finish()
 
-	cfg := &certificates.RenewalConfig{
-		ClusterName: "test-cluster",
-		OS:          string(certificates.OSTypeLinux),
-		Etcd: certificates.NodeConfig{
-			Nodes: []string{"etcd-1"},
-		},
-	}
-
-	osRenewer := certificates.BuildOSRenewer(cfg.OS, t.TempDir())
 	ssh := mocks.NewMockSSHRunner(ctrl)
-	kubeClient := kubemocks.NewMockClient(ctrl)
+	r := certificates.NewLinuxRenewer(t.TempDir())
 
 	ssh.EXPECT().
-		RunCommand(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("", nil)
 
 	ssh.EXPECT().
-		RunCommand(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	renewer := &certificates.Renewer{
-		BackupDir: t.TempDir(),
-		Kubectl:   kubeClient,
-		OS:        osRenewer,
-		SSHEtcd:   ssh,
-	}
-
-	if err := renewer.RenewCertificates(context.Background(), cfg, ""); err == nil {
-		t.Fatalf("RenewCertificates() expected error, got nil")
+	err := r.RenewEtcdCerts(context.Background(), "etcd-1", ssh)
+	if err == nil {
+		t.Fatalf("RenewEtcdCerts() expected error, got nil")
 	}
 }
 
-func TestRenewEtcdCertsWithValidateError(t *testing.T) {
+func TestLinuxRenewer_RenewEtcdCertsWithValidateError(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	t.Cleanup(ctrl.Finish)
+	defer ctrl.Finish()
 
-	cfg := &certificates.RenewalConfig{
-		ClusterName: "test-cluster",
-		OS:          string(certificates.OSTypeLinux),
-		Etcd: certificates.NodeConfig{
-			Nodes: []string{"etcd-1"},
-		},
-	}
-
-	osRenewer := certificates.BuildOSRenewer(cfg.OS, t.TempDir())
 	ssh := mocks.NewMockSSHRunner(ctrl)
-	kubeClient := kubemocks.NewMockClient(ctrl)
+	r := certificates.NewLinuxRenewer(t.TempDir())
 
 	ssh.EXPECT().
-		RunCommand(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("", nil)
 
 	ssh.EXPECT().
-		RunCommand(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("", nil)
 
 	ssh.EXPECT().
-		RunCommand(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	renewer := &certificates.Renewer{
-		BackupDir: t.TempDir(),
-		Kubectl:   kubeClient,
-		OS:        osRenewer,
-		SSHEtcd:   ssh,
-	}
-
-	if err := renewer.RenewCertificates(context.Background(), cfg, ""); err == nil {
-		t.Fatalf("RenewCertificates() expected error, got nil")
+	err := r.RenewEtcdCerts(context.Background(), "etcd-1", ssh)
+	if err == nil {
+		t.Fatalf("RenewEtcdCerts() expected error, got nil")
 	}
 }
 
