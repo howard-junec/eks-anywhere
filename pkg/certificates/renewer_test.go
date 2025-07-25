@@ -22,6 +22,21 @@ const (
 	backupDirStr          = "certificate_backup_"
 )
 
+func writeDummyEtcdCerts(t *testing.T, backupDir string) {
+	t.Helper()
+
+	dir := filepath.Join(backupDir, tempLocalEtcdCertsDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("creating directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "apiserver-etcd-client.crt"), []byte("cert"), 0o644); err != nil {
+		t.Fatalf("writing crt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "apiserver-etcd-client.key"), []byte("key"), 0o644); err != nil {
+		t.Fatalf("writing key: %v", err)
+	}
+}
+
 func TestNewRenewerSuccess(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
@@ -80,6 +95,58 @@ func TestNewRenewerSuccess(t *testing.T) {
 
 	if err := renewer.RenewCertificates(context.Background(), cfg, "etcd"); err != nil {
 		t.Fatalf("RenewCertificates() expected no error, got: %v", err)
+	}
+}
+
+func TestNewRenewerEtcdSSHError(t *testing.T) {
+	cfg := &certificates.RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          string(certificates.OSTypeLinux),
+		Etcd: certificates.NodeConfig{
+			Nodes: []string{"etcd-1"},
+			SSH: certificates.SSHConfig{
+				User:    "",
+				KeyPath: "/non-existent-path",
+			},
+		},
+		ControlPlane: certificates.NodeConfig{
+			Nodes: []string{"cp-1"},
+			SSH: certificates.SSHConfig{
+				User:    "user",
+				KeyPath: "key-path",
+			},
+		},
+	}
+
+	kubeClient := kubemocks.NewMockClient(nil)
+
+	_, err := certificates.NewRenewer(kubeClient, cfg.OS, cfg)
+	if err == nil {
+		t.Fatal("NewRenewer() expected error, got nil")
+	}
+}
+
+func TestNewRenewerControlPlaneSSHError(t *testing.T) {
+	cfg := &certificates.RenewalConfig{
+		ClusterName: "test-cluster",
+		OS:          string(certificates.OSTypeLinux),
+		Etcd: certificates.NodeConfig{
+			Nodes: []string{},
+		},
+		ControlPlane: certificates.NodeConfig{
+			Nodes: []string{"cp-1"},
+			SSH: certificates.SSHConfig{
+				User:    "",
+				KeyPath: "/non-existent-path",
+			},
+		},
+	}
+
+	kubeClient := kubemocks.NewMockClient(nil)
+
+	_, err := certificates.NewRenewer(kubeClient, cfg.OS, cfg)
+	if err == nil {
+		t.Fatal("NewRenewer() expected error, got nil")
 	}
 }
 
@@ -373,21 +440,6 @@ func TestRenewCertificates_CopyEtcdCertsError(t *testing.T) {
 	}
 }
 
-func writeDummyEtcdCerts(t *testing.T, backupDir string) {
-	t.Helper()
-
-	dir := filepath.Join(backupDir, tempLocalEtcdCertsDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("creating directory: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "apiserver-etcd-client.crt"), []byte("cert"), 0o644); err != nil {
-		t.Fatalf("writing crt: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "apiserver-etcd-client.key"), []byte("key"), 0o644); err != nil {
-		t.Fatalf("writing key: %v", err)
-	}
-}
-
 func TestRenewCertificates_ReadCertificateFileError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
@@ -573,57 +625,5 @@ func TestRenewCertificates_CleanupError(t *testing.T) {
 
 	if err := renewer.RenewCertificates(context.Background(), cfg, ""); err != nil {
 		t.Fatalf("RenewCertificates() expected no error even with cleanup failure, got: %v", err)
-	}
-}
-
-func TestNewRenewerEtcdSSHError(t *testing.T) {
-	cfg := &certificates.RenewalConfig{
-		ClusterName: "test-cluster",
-		OS:          string(certificates.OSTypeLinux),
-		Etcd: certificates.NodeConfig{
-			Nodes: []string{"etcd-1"},
-			SSH: certificates.SSHConfig{
-				User:    "",
-				KeyPath: "/non-existent-path",
-			},
-		},
-		ControlPlane: certificates.NodeConfig{
-			Nodes: []string{"cp-1"},
-			SSH: certificates.SSHConfig{
-				User:    "user",
-				KeyPath: "key-path",
-			},
-		},
-	}
-
-	kubeClient := kubemocks.NewMockClient(nil)
-
-	_, err := certificates.NewRenewer(kubeClient, cfg.OS, cfg)
-	if err == nil {
-		t.Fatal("NewRenewer() expected error, got nil")
-	}
-}
-
-func TestNewRenewerControlPlaneSSHError(t *testing.T) {
-	cfg := &certificates.RenewalConfig{
-		ClusterName: "test-cluster",
-		OS:          string(certificates.OSTypeLinux),
-		Etcd: certificates.NodeConfig{
-			Nodes: []string{},
-		},
-		ControlPlane: certificates.NodeConfig{
-			Nodes: []string{"cp-1"},
-			SSH: certificates.SSHConfig{
-				User:    "",
-				KeyPath: "/non-existent-path",
-			},
-		},
-	}
-
-	kubeClient := kubemocks.NewMockClient(nil)
-
-	_, err := certificates.NewRenewer(kubeClient, cfg.OS, cfg)
-	if err == nil {
-		t.Fatal("NewRenewer() expected error, got nil")
 	}
 }
