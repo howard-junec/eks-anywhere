@@ -38,8 +38,7 @@ func TestLinuxRenewer_RenewControlPlaneCertsWithRenewError(t *testing.T) {
 		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	err := r.RenewControlPlaneCerts(context.Background(), "cp-1", cfg, "", ssh)
-	if err == nil {
+	if err := r.RenewControlPlaneCerts(context.Background(), "cp-1", cfg, "", ssh); err == nil {
 		t.Fatalf("RenewControlPlaneCerts() expected error, got nil")
 	}
 }
@@ -71,8 +70,7 @@ func TestLinuxRenewer_RenewControlPlaneCertsWithValidationError(t *testing.T) {
 		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	err := r.RenewControlPlaneCerts(context.Background(), "cp-1", cfg, "", ssh)
-	if err == nil {
+	if err := r.RenewControlPlaneCerts(context.Background(), "cp-1", cfg, "", ssh); err == nil {
 		t.Fatalf("RenewControlPlaneCerts() expected error, got nil")
 	}
 }
@@ -92,8 +90,7 @@ func TestLinuxRenewer_RenewEtcdCertsWithJoinError(t *testing.T) {
 		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	err := r.RenewEtcdCerts(context.Background(), "etcd-1", ssh)
-	if err == nil {
+	if err := r.RenewEtcdCerts(context.Background(), "etcd-1", ssh); err == nil {
 		t.Fatalf("RenewEtcdCerts() expected error, got nil")
 	}
 }
@@ -117,8 +114,7 @@ func TestLinuxRenewer_RenewEtcdCertsWithValidateError(t *testing.T) {
 		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	err := r.RenewEtcdCerts(context.Background(), "etcd-1", ssh)
-	if err == nil {
+	if err := r.RenewEtcdCerts(context.Background(), "etcd-1", ssh); err == nil {
 		t.Fatalf("RenewEtcdCerts() expected error, got nil")
 	}
 }
@@ -148,8 +144,7 @@ func TestRenewControlPlaneCertsWithExternalEtcdTransferError(t *testing.T) {
 		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	err := r.RenewControlPlaneCerts(context.Background(), "cp-1", cfg, "", ssh)
-	if err == nil {
+	if err := r.RenewControlPlaneCerts(context.Background(), "cp-1", cfg, "", ssh); err == nil {
 		t.Fatalf("RenewControlPlaneCerts() expected error, got nil")
 	}
 }
@@ -165,8 +160,7 @@ func TestCopyEtcdCertsToLocalWithEmptyCert(t *testing.T) {
 		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("", nil)
 
-	err := r.CopyEtcdCertsToLocal(context.Background(), "etcd-1", ssh)
-	if err == nil {
+	if err := r.CopyEtcdCertsToLocal(context.Background(), "etcd-1", ssh); err == nil {
 		t.Fatalf("CopyEtcdCertsToLocal() expected error, got nil")
 	}
 }
@@ -186,8 +180,7 @@ func TestCopyEtcdCertsToLocalWithEmptyKey(t *testing.T) {
 		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("", nil)
 
-	err := r.CopyEtcdCertsToLocal(context.Background(), "etcd-1", ssh)
-	if err == nil {
+	if err := r.CopyEtcdCertsToLocal(context.Background(), "etcd-1", ssh); err == nil {
 		t.Fatalf("CopyEtcdCertsToLocal() expected error, got nil")
 	}
 }
@@ -199,8 +192,7 @@ func TestTransferCertsToControlPlaneWithReadCertError(t *testing.T) {
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := certificates.NewLinuxRenewer(t.TempDir())
 
-	err := r.TransferCertsToControlPlaneFromLocal(context.Background(), "cp-1", ssh)
-	if err == nil {
+	if err := r.TransferCertsToControlPlaneFromLocal(context.Background(), "cp-1", ssh); err == nil {
 		t.Fatalf("TransferCertsToControlPlaneFromLocal() expected error, got nil")
 	}
 }
@@ -228,8 +220,7 @@ func TestTransferCertsToControlPlaneWithCopyCertError(t *testing.T) {
 		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	err := r.TransferCertsToControlPlaneFromLocal(context.Background(), "cp-1", ssh)
-	if err == nil {
+	if err := r.TransferCertsToControlPlaneFromLocal(context.Background(), "cp-1", ssh); err == nil {
 		t.Fatalf("TransferCertsToControlPlaneFromLocal() expected error, got nil")
 	}
 }
@@ -259,8 +250,7 @@ func TestRenewControlPlaneCertsWithRestartPodsError(t *testing.T) {
 		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	err := r.RenewControlPlaneCerts(context.Background(), "cp-1", cfg, "", ssh)
-	if err == nil {
+	if err := r.RenewControlPlaneCerts(context.Background(), "cp-1", cfg, "", ssh); err == nil {
 		t.Fatalf("RenewControlPlaneCerts() expected error, got nil")
 	}
 }
@@ -280,8 +270,7 @@ func TestCopyEtcdCertsToLocalWithReadKeyError(t *testing.T) {
 		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	err := r.CopyEtcdCertsToLocal(context.Background(), "etcd-1", ssh)
-	if err == nil {
+	if err := r.CopyEtcdCertsToLocal(context.Background(), "etcd-1", ssh); err == nil {
 		t.Fatalf("CopyEtcdCertsToLocal() expected error, got nil")
 	}
 }
@@ -307,8 +296,7 @@ func TestCopyEtcdCertsToLocalWithMkdirError(t *testing.T) {
 		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("key", nil)
 
-	err := r.CopyEtcdCertsToLocal(context.Background(), "etcd-1", ssh)
-	if err == nil {
+	if err := r.CopyEtcdCertsToLocal(context.Background(), "etcd-1", ssh); err == nil {
 		t.Fatalf("CopyEtcdCertsToLocal() expected error, got nil")
 	}
 }
@@ -330,8 +318,7 @@ func TestTransferCertsToControlPlaneWithReadKeyError(t *testing.T) {
 	ssh := mocks.NewMockSSHRunner(ctrl)
 	r := certificates.NewLinuxRenewer(tmp)
 
-	err := r.TransferCertsToControlPlaneFromLocal(context.Background(), "cp-1", ssh)
-	if err == nil {
+	if err := r.TransferCertsToControlPlaneFromLocal(context.Background(), "cp-1", ssh); err == nil {
 		t.Fatalf("TransferCertsToControlPlaneFromLocal() expected error, got nil")
 	}
 }
@@ -354,8 +341,7 @@ func TestTransferCertsToControlPlaneWithCopyKeyError(t *testing.T) {
 		RunCommand(gomock.Any(), "cp-1", gomock.Any(), gomock.Any()).
 		Return("", errString)
 
-	err := r.TransferCertsToControlPlaneFromLocal(context.Background(), "cp-1", ssh)
-	if err == nil {
+	if err := r.TransferCertsToControlPlaneFromLocal(context.Background(), "cp-1", ssh); err == nil {
 		t.Fatalf("TransferCertsToControlPlaneFromLocal() expected error, got nil")
 	}
 }
@@ -391,8 +377,7 @@ func TestCopyEtcdCertsToLocalWithWriteKeyError(t *testing.T) {
 		RunCommand(gomock.Any(), "etcd-1", gomock.Any(), gomock.Any()).
 		Return("key", nil)
 
-	err := r.CopyEtcdCertsToLocal(context.Background(), "etcd-1", ssh)
-	if err == nil {
+	if err := r.CopyEtcdCertsToLocal(context.Background(), "etcd-1", ssh); err == nil {
 		t.Fatalf("CopyEtcdCertsToLocal() expected error, got nil")
 	}
 }
