@@ -5612,6 +5612,7 @@ func TestVSphereKubernetes130BottlerocketTo131Upgrade(t *testing.T) {
 		t,
 		provider,
 		framework.WithClusterFiller(api.WithKubernetesVersion(v1alpha1.Kube130)),
+		framework.WithClusterFiller(api.WithControlPlaneCount(3)),
 	)
 	runSimpleUpgradeFlow(
 		test,

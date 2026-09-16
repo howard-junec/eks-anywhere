@@ -101,6 +101,8 @@ env:
     LICENSE_TOKEN2: "extended_support:license_token2"
     STAGING_LICENSE_TOKEN: "extended_support:staging_license_token"
     STAGING_LICENSE_TOKEN2: "extended_support:staging_license_token2"
+    BOTTLEROCKET_BOOTSTRAP_IMAGE: "public.ecr.aws/w4n0j8w7/bottlerocket-bootstrap:v1-31-48-d64a7371f9b3206710c6445c9b2e9d34e86d1c04"
+    BOTTLEROCKET_BOOTSTRAP_IMAGE_DIGEST: "sha256:8953f899c189b759fc2513066b6618e08338fd233d61e8cb0ed2e34bdb94429c"
 phases:
   pre_build:
     commands:
@@ -112,6 +114,12 @@ phases:
         if ! [[ ${CODEBUILD_INITIATOR} =~ "codepipeline" ]]; then
           make build-eks-a-for-e2e build-integration-test-binary e2e-tests-binary E2E_TAGS="e2e vsphere" E2E_OUTPUT_FILE=bin/vsphere/e2e.test
         fi
+      - |
+        BUNDLE_MANIFEST_URL=$(curl -fsSL https://dev-release-prod-pdx.s3.us-west-2.amazonaws.com/eks-a-release.yaml | yq e -r '.spec.releases[-1].bundleManifestUrl' -)
+        curl -fsSL "${BUNDLE_MANIFEST_URL}" -o bin/local-bundle-release.yaml
+        yq e -i '(.spec.versionsBundles[] | select(.kubeVersion == "1.31").bottlerocketHostContainers.kubeadmBootstrap.uri) = strenv(BOTTLEROCKET_BOOTSTRAP_IMAGE)' bin/local-bundle-release.yaml
+        yq e -i '(.spec.versionsBundles[] | select(.kubeVersion == "1.31").bottlerocketHostContainers.kubeadmBootstrap.imageDigest) = strenv(BOTTLEROCKET_BOOTSTRAP_IMAGE_DIGEST)' bin/local-bundle-release.yaml
+        yq e '.spec.versionsBundles[] | select(.kubeVersion == "1.31").bottlerocketHostContainers.kubeadmBootstrap' bin/local-bundle-release.yaml
       - >
         ./bin/test e2e cleanup vsphere
         -n ${CLUSTER_NAME_PREFIX}
