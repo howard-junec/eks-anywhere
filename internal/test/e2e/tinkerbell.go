@@ -26,7 +26,7 @@ const (
 	tinkerbellCIEnvironmentEnvVar              = "T_TINKERBELL_CI_ENVIRONMENT"
 	tinkerbellExpectedImageEnvVar              = "EXPECTED_TINKERBELL_IMAGE"
 	tinkerbellExpectedImageDigestEnvVar        = "EXPECTED_TINKERBELL_IMAGE_DIGEST"
-	rufioHardOffRetryTestRegex                 = "^TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror$"
+	rufioHardOffRetryTestName                  = "TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror"
 )
 
 // TinkerbellTest maps each Tinkbell test with the hardware count needed for the test.
@@ -53,7 +53,7 @@ func (e *E2ESession) setupTinkerbellEnv(testRegex string) error {
 	if val, ok := os.LookupEnv(tinkerbellExpectedImageDigestEnvVar); ok {
 		e.testEnvVars[tinkerbellExpectedImageDigestEnvVar] = val
 	}
-	if testRegex == rufioHardOffRetryTestRegex {
+	if testRegex == rufioHardOffRetryTestName {
 		accessKey, secretKey, sessionToken, err := assumeRoleAndGetCredentials(
 			"PACKAGES_ROLE_ARN",
 			"test-rufio-candidate-image",

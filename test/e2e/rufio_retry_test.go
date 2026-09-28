@@ -54,6 +54,9 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	accessKey := os.Getenv(eksaAWSAccessKeyIDEnv)
 	secretKey := os.Getenv(eksaAWSSecretAccessKeyEnv)
 	sessionToken := os.Getenv(eksaAWSSessionTokenEnv)
+	if accessKey == "" || secretKey == "" || sessionToken == "" {
+		t.Fatal("Candidate image credentials were not forwarded to the E2E runner")
+	}
 	// Keep this IPv4-only test from using the kind node's IPv4-mapped address
 	// as an auto-detected public IPv6 address.
 	t.Setenv(tinkerbellPublicIPv6OverrideTestEnv, "::")
