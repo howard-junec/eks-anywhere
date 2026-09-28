@@ -30,6 +30,7 @@ import (
 
 const (
 	expectedTinkerbellImageEnv          = "EXPECTED_TINKERBELL_IMAGE"
+	expectedTinkerbellImageDigestEnv    = "EXPECTED_TINKERBELL_IMAGE_DIGEST"
 	tinkerbellPublicIPv6OverrideTestEnv = "EKSA_TEST_TINKERBELL_PUBLIC_IPV6"
 	localBundleReleaseFile              = "bin/local-bundle-release.yaml"
 	eksaAWSAccessKeyIDEnv               = "EKSA_AWS_ACCESS_KEY_ID"
@@ -45,7 +46,14 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if expectedImage == "" {
 		t.Fatalf("%s must identify the candidate Tinkerbell image", expectedTinkerbellImageEnv)
 	}
-	candidateRegistry := strings.SplitN(expectedImage, "/", 2)[0]
+	expectedDigest := os.Getenv(expectedTinkerbellImageDigestEnv)
+	if expectedDigest == "" {
+		t.Fatalf("%s must identify the candidate Tinkerbell digest", expectedTinkerbellImageDigestEnv)
+	}
+	candidateRegistry, candidateRepository, candidateTag := parseECRImage(t, expectedImage)
+	accessKey := os.Getenv(eksaAWSAccessKeyIDEnv)
+	secretKey := os.Getenv(eksaAWSSecretAccessKeyEnv)
+	sessionToken := os.Getenv(eksaAWSSessionTokenEnv)
 	// Keep this IPv4-only test from using the kind node's IPv4-mapped address
 	// as an auto-detected public IPv6 address.
 	t.Setenv(tinkerbellPublicIPv6OverrideTestEnv, "::")
@@ -60,10 +68,20 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	)
 	test.LoginToECRWithCredentials(
 		candidateRegistry,
-		os.Getenv(eksaAWSAccessKeyIDEnv),
-		os.Getenv(eksaAWSSecretAccessKeyEnv),
-		os.Getenv(eksaAWSSessionTokenEnv),
+		accessKey,
+		secretKey,
+		sessionToken,
 	)
+	actualDigest := test.GetECRImageDigestWithCredentials(
+		candidateRepository,
+		candidateTag,
+		accessKey,
+		secretKey,
+		sessionToken,
+	)
+	if actualDigest != expectedDigest {
+		t.Fatalf("Candidate image digest is %q, want %q", actualDigest, expectedDigest)
+	}
 	mirroredImage := mirrorTinkerbellCandidate(t, test, expectedImage)
 	t.Cleanup(func() {
 		test.CleanupDownloadedArtifactsAndImages()
@@ -154,8 +172,19 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if taskUID == "" {
 		t.Fatal("Fault-injected power-off Task has no UID")
 	}
-	if err := waitForRufioRetryLogs(ctx, test, kubeconfig, powerOffTask, retryStarted, 2); err != nil {
-		t.Fatalf("Power-off Task did not retry from its requeue timer: %v", err)
+	initialRetryCount, err := waitForRufioRetryLogCount(ctx, test, kubeconfig, powerOffTask, retryStarted, 1)
+	if err != nil {
+		t.Fatalf("Power-off Task emitted no retry log: %v", err)
+	}
+	if _, err := waitForRufioRetryLogCount(
+		ctx,
+		test,
+		kubeconfig,
+		powerOffTask,
+		retryStarted,
+		initialRetryCount+1,
+	); err != nil {
+		t.Fatalf("Power-off Task did not emit an additional timer-driven retry log: %v", err)
 	}
 
 	patchBytes, err := json.Marshal(map[string]any{
@@ -235,6 +264,17 @@ func mirrorTinkerbellCandidate(t *testing.T, test *framework.ClusterE2ETest, sou
 	}
 
 	return targetImage
+}
+
+func parseECRImage(t *testing.T, image string) (registry, repository, tag string) {
+	t.Helper()
+
+	slashIndex := strings.Index(image, "/")
+	tagIndex := strings.LastIndex(image, ":")
+	if slashIndex <= 0 || tagIndex <= slashIndex+1 || tagIndex == len(image)-1 {
+		t.Fatalf("Invalid ECR image URI %q", image)
+	}
+	return image[:slashIndex], image[slashIndex+1 : tagIndex], image[tagIndex+1:]
 }
 
 func assertTinkerbellImage(t *testing.T, ctx context.Context, test *framework.ClusterE2ETest, kubeconfig, expected string) {
@@ -376,14 +416,15 @@ func conditionMessage(task *unstructured.Unstructured, conditionType string) str
 	return ""
 }
 
-func waitForRufioRetryLogs(
+func waitForRufioRetryLogCount(
 	ctx context.Context,
 	test *framework.ClusterE2ETest,
 	kubeconfig, taskName string,
 	since time.Time,
 	want int,
-) error {
-	return wait.PollUntilContextTimeout(ctx, 5*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+) (int, error) {
+	count := 0
+	err := wait.PollUntilContextTimeout(ctx, 5*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
 		pod, err := test.KubectlClient.GetPodNameByLabel(ctx, constants.EksaSystemNamespace, "app=tinkerbell", kubeconfig)
 		if err != nil {
 			return false, nil
@@ -392,14 +433,15 @@ func waitForRufioRetryLogs(
 		if err != nil {
 			return false, nil
 		}
-		matches := 0
+		count = 0
 		for _, line := range strings.Split(logs, "\n") {
 			if strings.Contains(line, taskName) && strings.Contains(line, rufioRetryLogMessage) {
-				matches++
+				count++
 			}
 		}
-		return matches >= want, nil
+		return count >= want, nil
 	})
+	return count, err
 }
 
 func deleteRufioRetryResources(
