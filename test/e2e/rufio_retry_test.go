@@ -85,7 +85,13 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if actualDigest != expectedDigest {
 		t.Fatalf("Candidate image digest is %q, want %q", actualDigest, expectedDigest)
 	}
-	mirroredImage := mirrorTinkerbellCandidate(t, test, expectedImage, expectedDigest, candidateTag)
+	mirroredImage, mirroredBundleImage := mirrorTinkerbellCandidate(
+		t,
+		test,
+		expectedImage,
+		expectedDigest,
+		candidateTag,
+	)
 	t.Cleanup(func() {
 		test.CleanupDownloadedArtifactsAndImages()
 	})
@@ -93,6 +99,7 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	test.GenerateClusterConfig()
 	test.DownloadImages()
 	test.ImportImages()
+	setTinkerbellBundleImage(t, mirroredBundleImage)
 	test.GenerateHardwareConfig()
 	test.GenerateSupportBundleOnCleanupIfTestFailed()
 	test.CreateCluster(framework.WithControlPlaneWaitTimeout("20m"))
@@ -263,7 +270,7 @@ func mirrorTinkerbellCandidate(
 	t *testing.T,
 	test *framework.ClusterE2ETest,
 	sourceImage, sourceDigest, sourceTag string,
-) string {
+) (targetImage, bundleImage string) {
 	t.Helper()
 
 	endpoint := os.Getenv(framework.RegistryEndpointTinkerbellVar)
@@ -275,15 +282,24 @@ func mirrorTinkerbellCandidate(
 		t.Fatalf("Invalid candidate image or Tinkerbell registry configuration")
 	}
 
-	targetImage := fmt.Sprintf(
-		"%s/eks-anywhere/tinkerbell/tinkerbell:%s",
+	imagePath := fmt.Sprintf("eks-anywhere/tinkerbell/tinkerbell:%s", sourceTag)
+	targetImage = fmt.Sprintf(
+		"%s/%s",
 		net.JoinHostPort(endpoint, port),
-		sourceTag,
+		imagePath,
 	)
+	bundleImage = fmt.Sprintf("%s/%s", constants.DefaultCoreEKSARegistry, imagePath)
 	sourceReference := sourceImage + "@" + sourceDigest
 	test.Run("docker", "pull", sourceReference)
 	test.Run("docker", "tag", sourceReference, targetImage)
 	test.Run("docker", "push", targetImage)
+	setTinkerbellBundleImage(t, targetImage)
+
+	return targetImage, bundleImage
+}
+
+func setTinkerbellBundleImage(t *testing.T, image string) {
+	t.Helper()
 
 	bundleData, err := os.ReadFile(localBundleReleaseFile)
 	if err != nil {
@@ -295,7 +311,7 @@ func mirrorTinkerbellCandidate(
 	}
 	for i := range bundles.Spec.VersionsBundles {
 		boots := &bundles.Spec.VersionsBundles[i].Tinkerbell.TinkerbellStack.Boots
-		boots.URI = targetImage
+		boots.URI = image
 		boots.ImageDigest = ""
 	}
 	bundleData, err = yaml.Marshal(bundles)
@@ -305,8 +321,6 @@ func mirrorTinkerbellCandidate(
 	if err := os.WriteFile(localBundleReleaseFile, bundleData, 0o600); err != nil {
 		t.Fatalf("Failed to update local bundle: %v", err)
 	}
-
-	return targetImage
 }
 
 func parseECRImage(t *testing.T, image string) (registry, repository, tag string) {
