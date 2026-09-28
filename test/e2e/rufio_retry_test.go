@@ -65,7 +65,9 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 		os.Getenv(eksaAWSSessionTokenEnv),
 	)
 	mirroredImage := mirrorTinkerbellCandidate(t, test, expectedImage)
-	t.Cleanup(test.CleanupDownloadedArtifactsAndImages)
+	t.Cleanup(func() {
+		test.CleanupDownloadedArtifactsAndImages()
+	})
 
 	test.GenerateClusterConfig()
 	test.DownloadImages()
