@@ -102,6 +102,19 @@ phases:
       - source ${CODEBUILD_SRC_DIR}/cmd/integration_test/build/script/create_infra_config.sh
       - ${CODEBUILD_SRC_DIR}/cmd/integration_test/build/script/start_docker.sh
       - |
+        if [[ ${TEST_REGEX} == '^TestTinkerbellKubernetes136UbuntuRufioHardOffRetry$' ]]; then
+          test -n "${EXPECTED_TINKERBELL_IMAGE}"
+          test -n "${EXPECTED_TINKERBELL_IMAGE_DIGEST}"
+          mkdir -p "${CODEBUILD_SRC_DIR}/bin"
+          "${CODEBUILD_SRC_DIR}/scripts/get_bundle.sh"
+          EXPECTED_TINKERBELL_IMAGE="${EXPECTED_TINKERBELL_IMAGE}" \
+            yq e -i '.spec.versionsBundles[].tinkerbell.tinkerbellStack.boots.uri = strenv(EXPECTED_TINKERBELL_IMAGE)' \
+            "${CODEBUILD_SRC_DIR}/bin/local-bundle-release.yaml"
+          EXPECTED_TINKERBELL_IMAGE_DIGEST="${EXPECTED_TINKERBELL_IMAGE_DIGEST}" \
+            yq e -i '.spec.versionsBundles[].tinkerbell.tinkerbellStack.boots.imageDigest = strenv(EXPECTED_TINKERBELL_IMAGE_DIGEST)' \
+            "${CODEBUILD_SRC_DIR}/bin/local-bundle-release.yaml"
+        fi
+      - |
         if ! [[ ${CODEBUILD_INITIATOR} =~ "codepipeline" ]]; then
           make build-eks-a-for-e2e build-integration-test-binary e2e-tests-binary E2E_TAGS="e2e tinkerbell" E2E_OUTPUT_FILE=bin/tinkerbell/e2e.test
         fi
