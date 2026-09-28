@@ -100,6 +100,9 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	assertTinkerbellImage(t, ctx, test, kubeconfig, mirroredImage)
 
 	connection := spareWorkerConnection(t, ctx, test, kubeconfig)
+	if connection.ProviderOptions != nil && connection.ProviderOptions.RPC != nil {
+		t.Fatal("Safe fault injection does not support BMC connections that can bypass connection.host through RPC")
+	}
 	connectionObject := toUnstructuredConnection(t, connection)
 	namePrefix := test.ClusterName + "-rufio-retry"
 	powerOnTask := namePrefix + "-on"
