@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -17,27 +18,34 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/yaml"
 
 	"github.com/aws/eks-anywhere/internal/pkg/api"
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	rufiov1alpha1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1/thirdparty/tinkerbell/rufio"
 	"github.com/aws/eks-anywhere/pkg/constants"
+	releasev1alpha1 "github.com/aws/eks-anywhere/release/api/v1alpha1"
 	"github.com/aws/eks-anywhere/test/framework"
 )
 
 const (
 	expectedTinkerbellImageEnv          = "EXPECTED_TINKERBELL_IMAGE"
 	tinkerbellPublicIPv6OverrideTestEnv = "EKSA_TEST_TINKERBELL_PUBLIC_IPV6"
+	localBundleReleaseFile              = "bin/local-bundle-release.yaml"
+	eksaAWSAccessKeyIDEnv               = "EKSA_AWS_ACCESS_KEY_ID"
+	eksaAWSSecretAccessKeyEnv           = "EKSA_AWS_SECRET_ACCESS_KEY"
+	eksaAWSSessionTokenEnv              = "EKSA_AWS_SESSION_TOKEN"
 	rufioMachineResource                = "machines.bmc.tinkerbell.org"
 	rufioTaskResource                   = "tasks.bmc.tinkerbell.org"
 	rufioRetryLogMessage                = "power-off attempt failed; requeuing"
 )
 
-func TestTinkerbellKubernetes136UbuntuRufioHardOffRetry(t *testing.T) {
+func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing.T) {
 	expectedImage := os.Getenv(expectedTinkerbellImageEnv)
 	if expectedImage == "" {
 		t.Fatalf("%s must identify the candidate Tinkerbell image", expectedTinkerbellImageEnv)
 	}
+	candidateRegistry := strings.SplitN(expectedImage, "/", 2)[0]
 	// Keep this IPv4-only test from using the kind node's IPv4-mapped address
 	// as an auto-detected public IPv6 address.
 	t.Setenv(tinkerbellPublicIPv6OverrideTestEnv, "::")
@@ -48,9 +56,20 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetry(t *testing.T) {
 		framework.WithClusterSingleNode(v1alpha1.Kube136),
 		framework.WithControlPlaneHardware(1),
 		framework.WithWorkerHardware(1),
+		framework.WithRegistryMirrorEndpointAndCert(constants.TinkerbellProviderName),
 	)
+	test.LoginToECRWithCredentials(
+		candidateRegistry,
+		os.Getenv(eksaAWSAccessKeyIDEnv),
+		os.Getenv(eksaAWSSecretAccessKeyEnv),
+		os.Getenv(eksaAWSSessionTokenEnv),
+	)
+	mirroredImage := mirrorTinkerbellCandidate(t, test, expectedImage)
+	t.Cleanup(test.CleanupDownloadedArtifactsAndImages)
 
 	test.GenerateClusterConfig()
+	test.DownloadImages()
+	test.ImportImages()
 	test.GenerateHardwareConfig()
 	test.GenerateSupportBundleOnCleanupIfTestFailed()
 	test.CreateCluster(framework.WithControlPlaneWaitTimeout("20m"))
@@ -58,7 +77,7 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetry(t *testing.T) {
 
 	ctx := context.Background()
 	kubeconfig := test.KubeconfigFilePath()
-	assertTinkerbellImage(t, ctx, test, kubeconfig, expectedImage)
+	assertTinkerbellImage(t, ctx, test, kubeconfig, mirroredImage)
 
 	connection := spareWorkerConnection(t, ctx, test, kubeconfig)
 	connectionObject := toUnstructuredConnection(t, connection)
@@ -168,6 +187,52 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetry(t *testing.T) {
 	deleteRufioRetryResources(t, ctx, test, kubeconfig, powerOnTask, powerOffTask, cleanupTask, dummySecret)
 	test.DeleteCluster()
 	test.ValidateHardwareDecommissioned()
+}
+
+func mirrorTinkerbellCandidate(t *testing.T, test *framework.ClusterE2ETest, sourceImage string) string {
+	t.Helper()
+
+	endpoint := os.Getenv(framework.RegistryEndpointTinkerbellVar)
+	port := os.Getenv(framework.RegistryPortTinkerbellVar)
+	if port == "" {
+		port = "443"
+	}
+	tagIndex := strings.LastIndex(sourceImage, ":")
+	if endpoint == "" || tagIndex <= strings.LastIndex(sourceImage, "/") {
+		t.Fatalf("Invalid candidate image or Tinkerbell registry configuration")
+	}
+
+	targetImage := fmt.Sprintf(
+		"%s/eks-anywhere/tinkerbell/tinkerbell:%s",
+		net.JoinHostPort(endpoint, port),
+		sourceImage[tagIndex+1:],
+	)
+	test.Run("docker", "pull", sourceImage)
+	test.Run("docker", "tag", sourceImage, targetImage)
+	test.Run("docker", "push", targetImage)
+
+	bundleData, err := os.ReadFile(localBundleReleaseFile)
+	if err != nil {
+		t.Fatalf("Failed to read local bundle: %v", err)
+	}
+	bundles := &releasev1alpha1.Bundles{}
+	if err := yaml.Unmarshal(bundleData, bundles); err != nil {
+		t.Fatalf("Failed to parse local bundle: %v", err)
+	}
+	for i := range bundles.Spec.VersionsBundles {
+		boots := &bundles.Spec.VersionsBundles[i].Tinkerbell.TinkerbellStack.Boots
+		boots.URI = targetImage
+		boots.ImageDigest = ""
+	}
+	bundleData, err = yaml.Marshal(bundles)
+	if err != nil {
+		t.Fatalf("Failed to marshal local bundle: %v", err)
+	}
+	if err := os.WriteFile(localBundleReleaseFile, bundleData, 0o600); err != nil {
+		t.Fatalf("Failed to update local bundle: %v", err)
+	}
+
+	return targetImage
 }
 
 func assertTinkerbellImage(t *testing.T, ctx context.Context, test *framework.ClusterE2ETest, kubeconfig, expected string) {

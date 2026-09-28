@@ -25,6 +25,7 @@ const (
 	tinkerbellBootstrapInterfaceEnvVar         = "T_TINKERBELL_BOOTSTRAP_INTERFACE"
 	tinkerbellCIEnvironmentEnvVar              = "T_TINKERBELL_CI_ENVIRONMENT"
 	tinkerbellExpectedImageEnvVar              = "EXPECTED_TINKERBELL_IMAGE"
+	rufioHardOffRetryTestRegex                 = "^TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror$"
 )
 
 // TinkerbellTest maps each Tinkbell test with the hardware count needed for the test.
@@ -47,6 +48,21 @@ func (e *E2ESession) setupTinkerbellEnv(testRegex string) error {
 	}
 	if val, ok := os.LookupEnv(tinkerbellExpectedImageEnvVar); ok {
 		e.testEnvVars[tinkerbellExpectedImageEnvVar] = val
+	}
+	if testRegex == rufioHardOffRetryTestRegex {
+		accessKey, secretKey, sessionToken, err := assumeRoleAndGetCredentials(
+			"PACKAGES_ROLE_ARN",
+			"test-rufio-candidate-image",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to get candidate image credentials: %w", err)
+		}
+		e.testEnvVars["EKSA_AWS_ACCESS_KEY_ID"] = accessKey
+		e.testEnvVars["EKSA_AWS_SECRET_ACCESS_KEY"] = secretKey
+		e.testEnvVars["EKSA_AWS_SESSION_TOKEN"] = sessionToken
+		if region, ok := os.LookupEnv("EKSA_AWS_REGION"); ok {
+			e.testEnvVars["EKSA_AWS_REGION"] = region
+		}
 	}
 
 	inventoryFileName := fmt.Sprintf("%s.csv", getTestRunnerName(e.logger, e.jobId))

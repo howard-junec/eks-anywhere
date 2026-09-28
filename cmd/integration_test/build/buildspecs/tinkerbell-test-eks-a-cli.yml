@@ -102,7 +102,7 @@ phases:
       - source ${CODEBUILD_SRC_DIR}/cmd/integration_test/build/script/create_infra_config.sh
       - ${CODEBUILD_SRC_DIR}/cmd/integration_test/build/script/start_docker.sh
       - |
-        if [[ ${TEST_REGEX} == '^TestTinkerbellKubernetes136UbuntuRufioHardOffRetry$' ]]; then
+        if [[ ${TEST_REGEX} == '^TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror$' ]]; then
           test -n "${EXPECTED_TINKERBELL_IMAGE}"
           test -n "${EXPECTED_TINKERBELL_IMAGE_DIGEST}"
           mkdir -p "${CODEBUILD_SRC_DIR}/bin"
