@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -30,6 +31,8 @@ const (
 	localTinkWorkerImage         = "127.0.0.1/embedded/tink-worker"
 	rufioMaxConcurrentReconciles = 10
 	tinkMaxConcurrentReconciles  = 5
+
+	tinkerbellPublicIPv6OverrideEnvVar = "EKSA_TEST_TINKERBELL_PUBLIC_IPV6"
 )
 
 type Docker interface {
@@ -564,6 +567,21 @@ func (s *Installer) createValuesOverride(bundle releasev1alpha1.TinkerbellBundle
 
 	tinkerbellImage, tinkerbellTag := parseImageURI(tinkerbellImageURI)
 
+	globalEnvValues := map[string]any{
+		"backend":               "kube",
+		"backendKubeNamespace":  s.namespace,
+		"enableSmee":            !s.smeeOnDocker,
+		"enableTootles":         true,
+		"enableTinkServer":      true,
+		"enableTinkController":  true,
+		"enableRufioController": true,
+		"enableSecondstar":      false,
+		"enableCRDMigrations":   false,
+	}
+	if publicIPv6 := os.Getenv(tinkerbellPublicIPv6OverrideEnvVar); publicIPv6 != "" {
+		globalEnvValues["publicIpv6"] = publicIPv6
+	}
+
 	valuesMap := map[string]any{
 		"name":     "tinkerbell",
 		"publicIP": tinkerbellIP,
@@ -606,17 +624,7 @@ func (s *Installer) createValuesOverride(bundle releasev1alpha1.TinkerbellBundle
 				"interfaceMode": "macvlan",
 			},
 			"envs": map[string]any{
-				"globals": map[string]any{
-					"backend":               "kube",
-					"backendKubeNamespace":  s.namespace,
-					"enableSmee":            !s.smeeOnDocker,
-					"enableTootles":         true,
-					"enableTinkServer":      true,
-					"enableTinkController":  true,
-					"enableRufioController": true,
-					"enableSecondstar":      false,
-					"enableCRDMigrations":   false,
-				},
+				"globals": globalEnvValues,
 				"smee": map[string]any{
 					"dhcpEnabled":                     true,
 					"dhcpMode":                        "reservation",

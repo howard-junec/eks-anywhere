@@ -24,6 +24,7 @@ const (
 	tinkerbellDefaultMaxHardwarePerE2ETest     = 4
 	tinkerbellBootstrapInterfaceEnvVar         = "T_TINKERBELL_BOOTSTRAP_INTERFACE"
 	tinkerbellCIEnvironmentEnvVar              = "T_TINKERBELL_CI_ENVIRONMENT"
+	tinkerbellExpectedImageEnvVar              = "EXPECTED_TINKERBELL_IMAGE"
 )
 
 // TinkerbellTest maps each Tinkbell test with the hardware count needed for the test.
@@ -43,6 +44,9 @@ func (e *E2ESession) setupTinkerbellEnv(testRegex string) error {
 		if val, ok := os.LookupEnv(eVar); ok {
 			e.testEnvVars[eVar] = val
 		}
+	}
+	if val, ok := os.LookupEnv(tinkerbellExpectedImageEnvVar); ok {
+		e.testEnvVars[tinkerbellExpectedImageEnvVar] = val
 	}
 
 	inventoryFileName := fmt.Sprintf("%s.csv", getTestRunnerName(e.logger, e.jobId))
