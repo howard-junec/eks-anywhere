@@ -578,9 +578,6 @@ func (s *Installer) createValuesOverride(bundle releasev1alpha1.TinkerbellBundle
 		"enableSecondstar":      false,
 		"enableCRDMigrations":   false,
 	}
-	if publicIPv6 := os.Getenv(tinkerbellPublicIPv6OverrideEnvVar); publicIPv6 != "" {
-		globalEnvValues["publicIpv6"] = publicIPv6
-	}
 
 	valuesMap := map[string]any{
 		"name":     "tinkerbell",
@@ -693,6 +690,16 @@ func (s *Installer) createValuesOverride(bundle releasev1alpha1.TinkerbellBundle
 				},
 			},
 		},
+	}
+
+	if publicIPv6 := os.Getenv(tinkerbellPublicIPv6OverrideEnvVar); publicIPv6 != "" {
+		// The current test bundle chart predates the dedicated publicIpv6 value.
+		valuesMap["deployment"].(map[string]any)["additionalEnvs"] = []map[string]string{
+			{
+				"name":  "TINKERBELL_PUBLIC_IPV6",
+				"value": publicIPv6,
+			},
+		}
 	}
 
 	// Set load balancer interface if specified
