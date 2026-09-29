@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecr/types"
 	"github.com/go-logr/logr"
 	godigest "github.com/opencontainers/go-digest"
+	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
@@ -299,7 +300,7 @@ func prepareRufioCandidateImage(jobID string) (candidateImage *mirroredRufioCand
 	}
 	candidateImage.digest = pushedDigest
 
-	mirrorDigest, mirrorPlatformDigests, err := inspectRegistryImage(ctx, docker, mirrorImage)
+	mirrorDigest, mirrorPlatformDigests, err := inspectMirroredRufioCandidateImage(ctx, mirror, candidateImage)
 	if err != nil {
 		return nil, fmt.Errorf("inspecting mirrored candidate image: %w", err)
 	}
@@ -400,34 +401,9 @@ func deleteMirroredRufioCandidateImage(
 	if candidateImage == nil {
 		return nil
 	}
-	roots, err := x509.SystemCertPool()
-	if err != nil || roots == nil {
-		roots = x509.NewCertPool()
-	}
-	if !roots.AppendCertsFromPEM(mirror.caCert) {
-		return fmt.Errorf("Tinkerbell registry mirror CA contains no certificates")
-	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		RootCAs:    roots,
-	}
-	httpClient := &http.Client{
-		Transport: transport,
-		Timeout:   2 * time.Minute,
-	}
-
-	repository, err := remote.NewRepository(mirror.registry + "/" + candidateImage.repository)
+	repository, err := newMirroredRufioRepository(mirror, candidateImage.repository)
 	if err != nil {
-		return fmt.Errorf("creating candidate image repository client: %w", err)
-	}
-	repository.Client = &auth.Client{
-		Client: httpClient,
-		Cache:  auth.NewCache(),
-		Credential: auth.StaticCredential(mirror.registry, auth.Credential{
-			Username: mirror.username,
-			Password: mirror.password,
-		}),
+		return err
 	}
 	reference := candidateImage.digest
 	if reference == "" {
@@ -444,6 +420,79 @@ func deleteMirroredRufioCandidateImage(
 		return fmt.Errorf("deleting mirrored Rufio candidate image: %w", err)
 	}
 	return nil
+}
+
+func inspectMirroredRufioCandidateImage(
+	ctx context.Context,
+	mirror *registryMirrorConfig,
+	candidateImage *mirroredRufioCandidateImage,
+) (string, map[string]struct{}, error) {
+	repository, err := newMirroredRufioRepository(mirror, candidateImage.repository)
+	if err != nil {
+		return "", nil, err
+	}
+	descriptor, err := repository.Resolve(ctx, candidateImage.reference)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolving mirrored Rufio candidate image: %w", err)
+	}
+	manifestData, err := content.FetchAll(ctx, repository, descriptor)
+	if err != nil {
+		return "", nil, fmt.Errorf("fetching mirrored Rufio candidate manifest: %w", err)
+	}
+	var manifest struct {
+		Manifests []struct {
+			Digest string `json:"digest"`
+		} `json:"manifests"`
+	}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return "", nil, fmt.Errorf("parsing mirrored Rufio candidate manifest: %w", err)
+	}
+	platformDigests := make(map[string]struct{}, len(manifest.Manifests))
+	for _, platform := range manifest.Manifests {
+		if platform.Digest != "" {
+			platformDigests[platform.Digest] = struct{}{}
+		}
+	}
+	if len(platformDigests) == 0 {
+		platformDigests[descriptor.Digest.String()] = struct{}{}
+	}
+	return descriptor.Digest.String(), platformDigests, nil
+}
+
+func newMirroredRufioRepository(
+	mirror *registryMirrorConfig,
+	repositoryName string,
+) (*remote.Repository, error) {
+	roots, err := x509.SystemCertPool()
+	if err != nil || roots == nil {
+		roots = x509.NewCertPool()
+	}
+	if !roots.AppendCertsFromPEM(mirror.caCert) {
+		return nil, fmt.Errorf("Tinkerbell registry mirror CA contains no certificates")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    roots,
+	}
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   2 * time.Minute,
+	}
+
+	repository, err := remote.NewRepository(mirror.registry + "/" + repositoryName)
+	if err != nil {
+		return nil, fmt.Errorf("creating candidate image repository client: %w", err)
+	}
+	repository.Client = &auth.Client{
+		Client: httpClient,
+		Cache:  auth.NewCache(),
+		Credential: auth.StaticCredential(mirror.registry, auth.Credential{
+			Username: mirror.username,
+			Password: mirror.password,
+		}),
+	}
+	return repository, nil
 }
 
 func parsePrivateECRImage(image string) (privateECRImage, error) {
