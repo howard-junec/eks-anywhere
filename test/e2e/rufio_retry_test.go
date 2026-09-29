@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"testing"
@@ -32,13 +31,11 @@ import (
 )
 
 const (
-	expectedTinkerbellImageEnv          = "EXPECTED_TINKERBELL_IMAGE"
-	expectedTinkerbellImageDigestEnv    = "EXPECTED_TINKERBELL_IMAGE_DIGEST"
+	expectedTinkerbellMirrorImageEnv    = "EXPECTED_TINKERBELL_MIRROR_IMAGE"
+	expectedTinkerbellBundleImageEnv    = "EXPECTED_TINKERBELL_BUNDLE_IMAGE"
+	expectedTinkerbellRuntimeDigestsEnv = "EXPECTED_TINKERBELL_RUNTIME_DIGESTS"
 	tinkerbellPublicIPv6OverrideTestEnv = "EKSA_TEST_TINKERBELL_PUBLIC_IPV6"
 	localBundleReleaseFile              = "bin/local-bundle-release.yaml"
-	eksaAWSAccessKeyIDEnv               = "EKSA_AWS_ACCESS_KEY_ID"
-	eksaAWSSecretAccessKeyEnv           = "EKSA_AWS_SECRET_ACCESS_KEY"
-	eksaAWSSessionTokenEnv              = "EKSA_AWS_SESSION_TOKEN"
 	rufioJobResource                    = "jobs.bmc.tinkerbell.org"
 	rufioMachineResource                = "machines.bmc.tinkerbell.org"
 	rufioTaskResource                   = "tasks.bmc.tinkerbell.org"
@@ -46,21 +43,15 @@ const (
 )
 
 func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing.T) {
-	expectedImage := os.Getenv(expectedTinkerbellImageEnv)
-	if expectedImage == "" {
-		t.Fatalf("%s must identify the candidate Tinkerbell image", expectedTinkerbellImageEnv)
+	mirrorImage := os.Getenv(expectedTinkerbellMirrorImageEnv)
+	if mirrorImage == "" {
+		t.Fatalf("%s must identify the mirrored candidate image", expectedTinkerbellMirrorImageEnv)
 	}
-	expectedDigest := os.Getenv(expectedTinkerbellImageDigestEnv)
-	if expectedDigest == "" {
-		t.Fatalf("%s must identify the candidate Tinkerbell digest", expectedTinkerbellImageDigestEnv)
+	bundleImage := os.Getenv(expectedTinkerbellBundleImageEnv)
+	if bundleImage == "" {
+		t.Fatalf("%s must identify the candidate bundle image", expectedTinkerbellBundleImageEnv)
 	}
-	candidateRegistry, candidateRepository, candidateTag := parseECRImage(t, expectedImage)
-	accessKey := os.Getenv(eksaAWSAccessKeyIDEnv)
-	secretKey := os.Getenv(eksaAWSSecretAccessKeyEnv)
-	sessionToken := os.Getenv(eksaAWSSessionTokenEnv)
-	if accessKey == "" || secretKey == "" || sessionToken == "" {
-		t.Fatal("Candidate image credentials were not forwarded to the E2E runner")
-	}
+	runtimeDigests := parseImageDigests(t, os.Getenv(expectedTinkerbellRuntimeDigestsEnv))
 	// Keep this IPv4-only test from using the kind node's IPv4-mapped address
 	// as an auto-detected public IPv6 address.
 	t.Setenv(tinkerbellPublicIPv6OverrideTestEnv, "::")
@@ -73,37 +64,15 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 		framework.WithWorkerHardware(1),
 		framework.WithRegistryMirrorEndpointAndCert(constants.TinkerbellProviderName),
 	)
-	test.LoginToECRWithCredentials(
-		candidateRegistry,
-		accessKey,
-		secretKey,
-		sessionToken,
-	)
-	actualDigest := test.GetECRImageDigestWithCredentials(
-		candidateRepository,
-		candidateTag,
-		accessKey,
-		secretKey,
-		sessionToken,
-	)
-	if actualDigest != expectedDigest {
-		t.Fatalf("Candidate image digest is %q, want %q", actualDigest, expectedDigest)
-	}
-	mirroredBundleImage, mirroredImageDigests := mirrorTinkerbellCandidate(
-		t,
-		test,
-		expectedImage,
-		expectedDigest,
-		candidateTag,
-	)
 	t.Cleanup(func() {
 		test.CleanupDownloadedArtifactsAndImages()
 	})
 
+	setTinkerbellBundleImage(t, mirrorImage)
 	test.GenerateClusterConfig()
 	test.DownloadImages()
 	test.ImportImages()
-	setTinkerbellBundleImage(t, mirroredBundleImage)
+	setTinkerbellBundleImage(t, bundleImage)
 	test.GenerateHardwareConfig()
 	test.GenerateSupportBundleOnCleanupIfTestFailed()
 	test.CreateCluster(framework.WithControlPlaneWaitTimeout("20m"))
@@ -111,7 +80,7 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 
 	ctx := context.Background()
 	kubeconfig := test.KubeconfigFilePath()
-	assertTinkerbellImage(t, ctx, test, kubeconfig, mirroredBundleImage, mirroredImageDigests)
+	assertTinkerbellImage(t, ctx, test, kubeconfig, bundleImage, runtimeDigests)
 
 	connection := spareWorkerConnection(t, ctx, test, kubeconfig)
 	if connection.ProviderOptions != nil && connection.ProviderOptions.RPC != nil {
@@ -215,12 +184,12 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if err != nil {
 		t.Fatalf("Power-off Task did not emit two retry logs: %v", err)
 	}
-	if retryInterval := retryTimes[1].Sub(retryTimes[0]); retryInterval < 28*time.Second {
-		t.Fatalf("Power-off Task retried after %s, below the 30s minimum backoff", retryInterval)
+	if retryInterval := retryTimes[1].Sub(retryTimes[0]); retryInterval < 28*time.Second || retryInterval > 45*time.Second {
+		t.Fatalf("Power-off Task retry interval %s is outside the expected 30s-40s backoff", retryInterval)
 	}
 
-	restartStarted := time.Now()
 	restartTinkerbellController(t, ctx, test, kubeconfig)
+	restartReadyAt := time.Now()
 	restartedTask, err := waitForRufioTaskCondition(ctx, test, kubeconfig, powerOffTask, "Retrying")
 	if err != nil {
 		t.Fatalf("Power-off Task did not remain retryable after controller restart: %v", err)
@@ -228,8 +197,12 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if restartedTask.GetUID() != taskUID {
 		t.Fatalf("Controller restart recreated the Task: got UID %q, want %q", restartedTask.GetUID(), taskUID)
 	}
-	if _, err := waitForRufioRetryLogTimes(ctx, test, kubeconfig, powerOffTask, restartStarted, 1); err != nil {
+	resumedRetryTimes, err := waitForRufioRetryLogTimes(ctx, test, kubeconfig, powerOffTask, restartReadyAt, 1)
+	if err != nil {
 		t.Fatalf("Restarted controller did not resume the retrying Task: %v", err)
+	}
+	if resumeDelay := resumedRetryTimes[0].Sub(restartReadyAt); resumeDelay > 45*time.Second {
+		t.Fatalf("Restarted controller took %s to resume the retrying Task", resumeDelay)
 	}
 
 	endpoints := &corev1.Endpoints{
@@ -287,92 +260,6 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	test.ValidateHardwareDecommissioned()
 }
 
-func mirrorTinkerbellCandidate(
-	t *testing.T,
-	test *framework.ClusterE2ETest,
-	sourceImage, sourceDigest, sourceTag string,
-) (bundleImage string, runtimeDigests map[string]struct{}) {
-	t.Helper()
-
-	endpoint := os.Getenv(framework.RegistryEndpointTinkerbellVar)
-	port := os.Getenv(framework.RegistryPortTinkerbellVar)
-	if port == "" {
-		port = "443"
-	}
-	if endpoint == "" || sourceDigest == "" || sourceTag == "" {
-		t.Fatalf("Invalid candidate image or Tinkerbell registry configuration")
-	}
-
-	imagePath := fmt.Sprintf("eks-anywhere/tinkerbell/tinkerbell:%s", sourceTag)
-	targetImage := fmt.Sprintf(
-		"%s/%s",
-		net.JoinHostPort(endpoint, port),
-		imagePath,
-	)
-	bundleImage = fmt.Sprintf("%s/%s", constants.DefaultCoreEKSARegistry, imagePath)
-	sourceReference := sourceImage + "@" + sourceDigest
-	sourceIndexDigest, sourcePlatformDigests := inspectRegistryImage(t, sourceReference)
-	if sourceIndexDigest != sourceDigest {
-		t.Fatalf("Candidate registry returned digest %q, want %q", sourceIndexDigest, sourceDigest)
-	}
-	test.Run("docker", "pull", sourceReference)
-	test.Run("docker", "tag", sourceReference, targetImage)
-	test.Run("docker", "push", targetImage)
-	targetDigest, targetPlatformDigests := inspectRegistryImage(t, targetImage)
-	if _, ok := sourcePlatformDigests[targetDigest]; !ok && targetDigest != sourceDigest {
-		t.Fatalf("Mirrored image digest %q is not part of candidate image %q", targetDigest, sourceDigest)
-	}
-	runtimeDigests = targetPlatformDigests
-	if len(runtimeDigests) == 0 {
-		runtimeDigests = map[string]struct{}{targetDigest: {}}
-	}
-	setTinkerbellBundleImage(t, targetImage)
-
-	return bundleImage, runtimeDigests
-}
-
-func inspectRegistryImage(t *testing.T, image string) (string, map[string]struct{}) {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	inspectOutput, err := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", image).CombinedOutput()
-	if err != nil {
-		t.Fatalf("Failed to inspect registry image %q: %v: %s", image, err, strings.TrimSpace(string(inspectOutput)))
-	}
-	var digest string
-	for _, line := range strings.Split(string(inspectOutput), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Digest:") {
-			digest = strings.TrimSpace(strings.TrimPrefix(line, "Digest:"))
-			break
-		}
-	}
-	if digest == "" {
-		t.Fatalf("Registry image %q did not report a digest", image)
-	}
-
-	rawOutput, err := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", "--raw", image).CombinedOutput()
-	if err != nil {
-		t.Fatalf("Failed to inspect raw registry manifest %q: %v: %s", image, err, strings.TrimSpace(string(rawOutput)))
-	}
-	var manifest struct {
-		Manifests []struct {
-			Digest string `json:"digest"`
-		} `json:"manifests"`
-	}
-	if err := json.Unmarshal(rawOutput, &manifest); err != nil {
-		t.Fatalf("Failed to parse registry manifest for %q: %v", image, err)
-	}
-	platformDigests := make(map[string]struct{}, len(manifest.Manifests))
-	for _, descriptor := range manifest.Manifests {
-		if descriptor.Digest != "" {
-			platformDigests[descriptor.Digest] = struct{}{}
-		}
-	}
-	return digest, platformDigests
-}
-
 func setTinkerbellBundleImage(t *testing.T, image string) {
 	t.Helper()
 
@@ -398,15 +285,23 @@ func setTinkerbellBundleImage(t *testing.T, image string) {
 	}
 }
 
-func parseECRImage(t *testing.T, image string) (registry, repository, tag string) {
+func parseImageDigests(t *testing.T, value string) map[string]struct{} {
 	t.Helper()
-
-	slashIndex := strings.Index(image, "/")
-	tagIndex := strings.LastIndex(image, ":")
-	if slashIndex <= 0 || tagIndex <= slashIndex+1 || tagIndex == len(image)-1 {
-		t.Fatalf("Invalid ECR image URI %q", image)
+	digests := make(map[string]struct{})
+	for _, digest := range strings.Split(value, ",") {
+		digest = strings.TrimSpace(digest)
+		if digest == "" {
+			continue
+		}
+		if !strings.HasPrefix(digest, "sha256:") {
+			t.Fatalf("%s contains invalid digest %q", expectedTinkerbellRuntimeDigestsEnv, digest)
+		}
+		digests[digest] = struct{}{}
 	}
-	return image[:slashIndex], image[slashIndex+1 : tagIndex], image[tagIndex+1:]
+	if len(digests) == 0 {
+		t.Fatalf("%s must contain at least one image digest", expectedTinkerbellRuntimeDigestsEnv)
+	}
+	return digests
 }
 
 func assertTinkerbellImage(

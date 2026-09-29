@@ -10,29 +10,33 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
-	"github.com/aws/aws-sdk-go-v2/service/ecr/types"
 )
 
 func loginToPackagesRegistry(e *ClusterE2ETest, registry string) {
 	accessKey := os.Getenv(eksaPackagesAccessKey)
 	secretKey := os.Getenv(eksaPackagesSecretKey)
 	sessionToken := os.Getenv(eksaPackagesSessionTokenKey)
-	e.LoginToECRWithCredentials(registry, accessKey, secretKey, sessionToken)
+	loginToECRWithCredentials(e, registry, accessKey, secretKey, sessionToken)
 }
 
-// LoginToECRWithCredentials logs Docker into ECR for subsequent EKS-A commands.
-func (e *ClusterE2ETest) LoginToECRWithCredentials(registry, accessKey, secretKey, sessionToken string) {
+// loginToECRWithCredentials performs Docker login with explicit credentials.
+func loginToECRWithCredentials(e *ClusterE2ETest, registry, accessKey, secretKey, sessionToken string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	ecrClient := e.ecrClientWithCredentials(ctx, accessKey, secretKey, sessionToken)
-	authTokenOutput, err := ecrClient.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
+	cfg, err := config.LoadDefaultConfig(
+		ctx,
+		config.WithRegion(defaultRegion),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)),
+	)
+	if err != nil {
+		e.T.Fatalf("aws config error: %v", err)
+	}
+
+	ecrClient := ecr.NewFromConfig(cfg)
+	authTokenOutput, err := ecrClient.GetAuthorizationToken(context.Background(), &ecr.GetAuthorizationTokenInput{})
 	if err != nil {
 		e.T.Fatalf("failed to fetch authorization token from ECR for registry %s : %v", registry, err)
-	}
-	if len(authTokenOutput.AuthorizationData) == 0 ||
-		authTokenOutput.AuthorizationData[0].AuthorizationToken == nil {
-		e.T.Fatalf("ECR returned no authorization token for registry %s", registry)
 	}
 
 	decoded, err := base64.StdEncoding.DecodeString(*authTokenOutput.AuthorizationData[0].AuthorizationToken)
@@ -47,44 +51,8 @@ func (e *ClusterE2ETest) LoginToECRWithCredentials(registry, accessKey, secretKe
 
 	username, password := parts[0], parts[1]
 
-	err = buildDocker(e.T).Login(ctx, registry, username, password)
+	err = buildDocker(e.T).Login(context.Background(), registry, username, password)
 	if err != nil {
 		e.T.Fatalf("error logging into docker registry %s: %v", registry, err)
 	}
-}
-
-// GetECRImageDigestWithCredentials resolves an ECR tag to its registry digest.
-func (e *ClusterE2ETest) GetECRImageDigestWithCredentials(repository, tag, accessKey, secretKey, sessionToken string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	ecrClient := e.ecrClientWithCredentials(ctx, accessKey, secretKey, sessionToken)
-	output, err := ecrClient.DescribeImages(ctx, &ecr.DescribeImagesInput{
-		RepositoryName: &repository,
-		ImageIds: []types.ImageIdentifier{
-			{ImageTag: &tag},
-		},
-	})
-	if err != nil {
-		e.T.Fatalf("failed to resolve ECR image %s:%s: %v", repository, tag, err)
-	}
-	if len(output.ImageDetails) == 0 || output.ImageDetails[0].ImageDigest == nil {
-		e.T.Fatalf("ECR returned no digest for image %s:%s", repository, tag)
-	}
-	return *output.ImageDetails[0].ImageDigest
-}
-
-func (e *ClusterE2ETest) ecrClientWithCredentials(
-	ctx context.Context,
-	accessKey, secretKey, sessionToken string,
-) *ecr.Client {
-	cfg, err := config.LoadDefaultConfig(
-		ctx,
-		config.WithRegion(defaultRegion),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)),
-	)
-	if err != nil {
-		e.T.Fatalf("aws config error: %v", err)
-	}
-	return ecr.NewFromConfig(cfg)
 }
