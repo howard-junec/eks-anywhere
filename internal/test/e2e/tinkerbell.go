@@ -2,11 +2,16 @@ package e2e
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -43,7 +48,7 @@ const (
 	tinkerbellMirrorImageEnvVar                = "EXPECTED_TINKERBELL_MIRROR_IMAGE"
 	tinkerbellBundleImageEnvVar                = "EXPECTED_TINKERBELL_BUNDLE_IMAGE"
 	tinkerbellRuntimeDigestsEnvVar             = "EXPECTED_TINKERBELL_RUNTIME_DIGESTS"
-	rufioHardOffRetryTestRegex                 = "^TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror$"
+	rufioHardOffRetryTestName                  = "TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror"
 )
 
 type privateECRImage struct {
@@ -52,6 +57,21 @@ type privateECRImage struct {
 	region     string
 	repository string
 	tag        string
+}
+
+type registryMirrorConfig struct {
+	registry string
+	username string
+	password string
+	caCert   []byte
+}
+
+type mirroredRufioCandidateImage struct {
+	mirrorImage    string
+	bundleImage    string
+	runtimeDigests []string
+	repository     string
+	digest         string
 }
 
 // TinkerbellTest maps each Tinkbell test with the hardware count needed for the test.
@@ -72,14 +92,15 @@ func (e *E2ESession) setupTinkerbellEnv(testRegex string) error {
 			e.testEnvVars[eVar] = val
 		}
 	}
-	if testRegex == rufioHardOffRetryTestRegex {
-		mirrorImage, bundleImage, runtimeDigests, err := prepareRufioCandidateImage()
+	if testRegex == rufioHardOffRetryTestName {
+		candidateImage, err := prepareRufioCandidateImage(e.jobId)
 		if err != nil {
 			return fmt.Errorf("preparing Rufio candidate image: %w", err)
 		}
-		e.testEnvVars[tinkerbellMirrorImageEnvVar] = mirrorImage
-		e.testEnvVars[tinkerbellBundleImageEnvVar] = bundleImage
-		e.testEnvVars[tinkerbellRuntimeDigestsEnvVar] = strings.Join(runtimeDigests, ",")
+		e.rufioCandidateImage = candidateImage
+		e.testEnvVars[tinkerbellMirrorImageEnvVar] = candidateImage.mirrorImage
+		e.testEnvVars[tinkerbellBundleImageEnvVar] = candidateImage.bundleImage
+		e.testEnvVars[tinkerbellRuntimeDigestsEnvVar] = strings.Join(candidateImage.runtimeDigests, ",")
 	}
 
 	inventoryFileName := fmt.Sprintf("%s.csv", getTestRunnerName(e.logger, e.jobId))
@@ -123,23 +144,26 @@ func (e *E2ESession) setupTinkerbellEnv(testRegex string) error {
 	return nil
 }
 
-func prepareRufioCandidateImage() (mirrorImage, bundleImage string, runtimeDigests []string, err error) {
+func prepareRufioCandidateImage(jobID string) (*mirroredRufioCandidateImage, error) {
 	sourceImage := strings.TrimSpace(os.Getenv(tinkerbellExpectedImageEnvVar))
 	expectedDigest := strings.TrimSpace(os.Getenv(tinkerbellExpectedImageDigestEnvVar))
+	if strings.TrimSpace(jobID) == "" {
+		return nil, fmt.Errorf("E2E job ID must be set for the Rufio candidate image")
+	}
 	if sourceImage == "" || expectedDigest == "" {
-		return "", "", nil, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%s and %s must be set",
 			tinkerbellExpectedImageEnvVar,
 			tinkerbellExpectedImageDigestEnvVar,
 		)
 	}
 	if !strings.HasPrefix(expectedDigest, "sha256:") {
-		return "", "", nil, fmt.Errorf("candidate digest %q is not a sha256 digest", expectedDigest)
+		return nil, fmt.Errorf("candidate digest %q is not a sha256 digest", expectedDigest)
 	}
 
 	source, err := parsePrivateECRImage(sourceImage)
 	if err != nil {
-		return "", "", nil, err
+		return nil, err
 	}
 
 	accessKey, secretKey, sessionToken, err := assumeRoleAndGetCredentials(
@@ -147,7 +171,7 @@ func prepareRufioCandidateImage() (mirrorImage, bundleImage string, runtimeDiges
 		"test-rufio-candidate-image",
 	)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("getting candidate image credentials: %w", err)
+		return nil, fmt.Errorf("getting candidate image credentials: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -159,7 +183,7 @@ func prepareRufioCandidateImage() (mirrorImage, bundleImage string, runtimeDiges
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)),
 	)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("loading candidate ECR config: %w", err)
+		return nil, fmt.Errorf("loading candidate ECR config: %w", err)
 	}
 	ecrClient := ecr.NewFromConfig(cfg)
 	describeOutput, err := ecrClient.DescribeImages(ctx, &ecr.DescribeImagesInput{
@@ -169,13 +193,13 @@ func prepareRufioCandidateImage() (mirrorImage, bundleImage string, runtimeDiges
 		},
 	})
 	if err != nil {
-		return "", "", nil, fmt.Errorf("resolving candidate image digest: %w", err)
+		return nil, fmt.Errorf("resolving candidate image digest: %w", err)
 	}
 	if len(describeOutput.ImageDetails) == 0 || describeOutput.ImageDetails[0].ImageDigest == nil {
-		return "", "", nil, fmt.Errorf("candidate ECR image %s has no digest", sourceImage)
+		return nil, fmt.Errorf("candidate ECR image %s has no digest", sourceImage)
 	}
 	if actualDigest := aws.ToString(describeOutput.ImageDetails[0].ImageDigest); actualDigest != expectedDigest {
-		return "", "", nil, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"candidate ECR image digest is %q, want %q",
 			actualDigest,
 			expectedDigest,
@@ -186,7 +210,7 @@ func prepareRufioCandidateImage() (mirrorImage, bundleImage string, runtimeDiges
 		RegistryIds: []string{source.registryID},
 	})
 	if err != nil {
-		return "", "", nil, fmt.Errorf("getting candidate ECR authorization token: %w", err)
+		return nil, fmt.Errorf("getting candidate ECR authorization token: %w", err)
 	}
 	var authorizationToken string
 	for _, authorizationData := range authOutput.AuthorizationData {
@@ -196,64 +220,62 @@ func prepareRufioCandidateImage() (mirrorImage, bundleImage string, runtimeDiges
 		}
 	}
 	if authorizationToken == "" {
-		return "", "", nil, fmt.Errorf("candidate ECR returned no authorization token for %s", source.registry)
+		return nil, fmt.Errorf("candidate ECR returned no authorization token for %s", source.registry)
 	}
 	decodedToken, err := base64.StdEncoding.DecodeString(authorizationToken)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("decoding candidate ECR authorization token: %w", err)
+		return nil, fmt.Errorf("decoding candidate ECR authorization token: %w", err)
 	}
 	ecrCredentials := strings.SplitN(string(decodedToken), ":", 2)
 	if len(ecrCredentials) != 2 {
-		return "", "", nil, fmt.Errorf("candidate ECR returned an invalid authorization token")
+		return nil, fmt.Errorf("candidate ECR returned an invalid authorization token")
 	}
 
-	mirrorEndpoint := strings.TrimSpace(os.Getenv(e2etests.RegistryEndpointTinkerbellVar))
-	mirrorPort := strings.TrimSpace(os.Getenv(e2etests.RegistryPortTinkerbellVar))
-	mirrorUsername := os.Getenv(e2etests.RegistryUsernameTinkerbellVar)
-	mirrorPassword := os.Getenv(e2etests.RegistryPasswordTinkerbellVar)
-	if mirrorPort == "" {
-		mirrorPort = "443"
+	mirror, err := loadTinkerbellRegistryMirrorConfig()
+	if err != nil {
+		return nil, err
 	}
-	if mirrorEndpoint == "" || mirrorUsername == "" || mirrorPassword == "" {
-		return "", "", nil, fmt.Errorf("Tinkerbell registry mirror configuration is incomplete")
+	if err := installDockerRegistryCA(mirror.registry, mirror.caCert); err != nil {
+		return nil, fmt.Errorf("installing Tinkerbell registry mirror CA: %w", err)
 	}
-	mirrorRegistry := net.JoinHostPort(mirrorEndpoint, mirrorPort)
-	imagePath := fmt.Sprintf("eks-anywhere/tinkerbell/tinkerbell:%s", source.tag)
-	mirrorImage = fmt.Sprintf("%s/%s", mirrorRegistry, imagePath)
-	bundleImage = fmt.Sprintf("%s/%s", constants.DefaultCoreEKSARegistry, imagePath)
+	runHash := sha256.Sum256([]byte(jobID))
+	repository := fmt.Sprintf("eks-anywhere/e2e/rufio-%x/tinkerbell", runHash[:6])
+	imagePath := fmt.Sprintf("%s:%s", repository, source.tag)
+	mirrorImage := fmt.Sprintf("%s/%s", mirror.registry, imagePath)
+	bundleImage := fmt.Sprintf("%s/%s", constants.DefaultCoreEKSARegistry, imagePath)
 
 	docker := executables.BuildDockerExecutable()
 	if err := docker.Login(ctx, source.registry, ecrCredentials[0], ecrCredentials[1]); err != nil {
-		return "", "", nil, fmt.Errorf("logging in to candidate ECR registry: %w", err)
+		return nil, fmt.Errorf("logging in to candidate ECR registry: %w", err)
 	}
-	if err := docker.Login(ctx, mirrorRegistry, mirrorUsername, mirrorPassword); err != nil {
-		return "", "", nil, fmt.Errorf("logging in to Tinkerbell registry mirror: %w", err)
+	if err := docker.Login(ctx, mirror.registry, mirror.username, mirror.password); err != nil {
+		return nil, fmt.Errorf("logging in to Tinkerbell registry mirror: %w", err)
 	}
 
 	sourceReference := sourceImage + "@" + expectedDigest
 	sourceDigest, sourcePlatformDigests, err := inspectRegistryImage(ctx, docker, sourceReference)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("inspecting candidate image: %w", err)
+		return nil, fmt.Errorf("inspecting candidate image: %w", err)
 	}
 	if sourceDigest != expectedDigest {
-		return "", "", nil, fmt.Errorf("candidate registry returned digest %q, want %q", sourceDigest, expectedDigest)
+		return nil, fmt.Errorf("candidate registry returned digest %q, want %q", sourceDigest, expectedDigest)
 	}
 	if err := docker.PullImage(ctx, sourceReference); err != nil {
-		return "", "", nil, fmt.Errorf("pulling candidate image: %w", err)
+		return nil, fmt.Errorf("pulling candidate image: %w", err)
 	}
 	if _, err := docker.Execute(ctx, "tag", sourceReference, mirrorImage); err != nil {
-		return "", "", nil, fmt.Errorf("tagging candidate image for mirror: %w", err)
+		return nil, fmt.Errorf("tagging candidate image for mirror: %w", err)
 	}
 	if _, err := docker.Execute(ctx, "push", mirrorImage); err != nil {
-		return "", "", nil, fmt.Errorf("pushing candidate image to mirror: %w", err)
+		return nil, fmt.Errorf("pushing candidate image to mirror: %w", err)
 	}
 
 	mirrorDigest, mirrorPlatformDigests, err := inspectRegistryImage(ctx, docker, mirrorImage)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("inspecting mirrored candidate image: %w", err)
+		return nil, fmt.Errorf("inspecting mirrored candidate image: %w", err)
 	}
 	if _, ok := sourcePlatformDigests[mirrorDigest]; !ok && mirrorDigest != expectedDigest {
-		return "", "", nil, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"mirrored image digest %q is not part of candidate image %q",
 			mirrorDigest,
 			expectedDigest,
@@ -262,13 +284,106 @@ func prepareRufioCandidateImage() (mirrorImage, bundleImage string, runtimeDiges
 	if len(mirrorPlatformDigests) == 0 {
 		mirrorPlatformDigests[mirrorDigest] = struct{}{}
 	}
-	runtimeDigests = make([]string, 0, len(mirrorPlatformDigests))
+	runtimeDigests := make([]string, 0, len(mirrorPlatformDigests))
 	for digest := range mirrorPlatformDigests {
 		runtimeDigests = append(runtimeDigests, digest)
 	}
 	sort.Strings(runtimeDigests)
 
-	return mirrorImage, bundleImage, runtimeDigests, nil
+	return &mirroredRufioCandidateImage{
+		mirrorImage:    mirrorImage,
+		bundleImage:    bundleImage,
+		runtimeDigests: runtimeDigests,
+		repository:     repository,
+		digest:         mirrorDigest,
+	}, nil
+}
+
+func loadTinkerbellRegistryMirrorConfig() (*registryMirrorConfig, error) {
+	endpoint := strings.TrimSpace(os.Getenv(e2etests.RegistryEndpointTinkerbellVar))
+	port := strings.TrimSpace(os.Getenv(e2etests.RegistryPortTinkerbellVar))
+	username := os.Getenv(e2etests.RegistryUsernameTinkerbellVar)
+	password := os.Getenv(e2etests.RegistryPasswordTinkerbellVar)
+	encodedCACert := strings.TrimSpace(os.Getenv(e2etests.RegistryCACertTinkerbellVar))
+	if port == "" {
+		port = "443"
+	}
+	if endpoint == "" || username == "" || password == "" || encodedCACert == "" {
+		return nil, fmt.Errorf("Tinkerbell registry mirror configuration is incomplete")
+	}
+	if strings.ContainsAny(endpoint, `/\`) || strings.Contains(endpoint, "..") {
+		return nil, fmt.Errorf("Tinkerbell registry mirror endpoint %q is invalid", endpoint)
+	}
+	caCert, err := base64.StdEncoding.DecodeString(encodedCACert)
+	if err != nil {
+		return nil, fmt.Errorf("decoding Tinkerbell registry mirror CA: %w", err)
+	}
+	return &registryMirrorConfig{
+		registry: net.JoinHostPort(endpoint, port),
+		username: username,
+		password: password,
+		caCert:   caCert,
+	}, nil
+}
+
+func installDockerRegistryCA(registry string, caCert []byte) error {
+	certDirectory := filepath.Join("/etc/docker/certs.d", registry)
+	if err := os.MkdirAll(certDirectory, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(certDirectory, "ca.crt"), caCert, 0o644)
+}
+
+func (e *E2ESession) cleanupRufioCandidateImage() error {
+	if e.rufioCandidateImage == nil {
+		return nil
+	}
+	mirror, err := loadTinkerbellRegistryMirrorConfig()
+	if err != nil {
+		return fmt.Errorf("loading Tinkerbell registry mirror config for cleanup: %w", err)
+	}
+
+	roots, err := x509.SystemCertPool()
+	if err != nil || roots == nil {
+		roots = x509.NewCertPool()
+	}
+	if !roots.AppendCertsFromPEM(mirror.caCert) {
+		return fmt.Errorf("Tinkerbell registry mirror CA contains no certificates")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    roots,
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   2 * time.Minute,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	deleteURL := fmt.Sprintf(
+		"https://%s/v2/%s/manifests/%s",
+		mirror.registry,
+		e.rufioCandidateImage.repository,
+		e.rufioCandidateImage.digest,
+	)
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
+	if err != nil {
+		return fmt.Errorf("creating candidate image cleanup request: %w", err)
+	}
+	request.SetBasicAuth(mirror.username, mirror.password)
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("deleting mirrored Rufio candidate image: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusAccepted &&
+		response.StatusCode != http.StatusOK &&
+		response.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("deleting mirrored Rufio candidate image returned %s", response.Status)
+	}
+	return nil
 }
 
 func parsePrivateECRImage(image string) (privateECRImage, error) {

@@ -262,6 +262,15 @@ func RunTests(conf instanceRunConf, inventoryCatalogue map[string]*hardwareCatal
 	if err != nil {
 		return "", nil, err
 	}
+	defer func() {
+		if cleanupErr := session.cleanupRufioCandidateImage(); cleanupErr != nil {
+			if err == nil {
+				err = cleanupErr
+				return
+			}
+			conf.Logger.Error(cleanupErr, "Failed to clean up mirrored Rufio candidate image")
+		}
+	}()
 
 	err = session.setup(conf.Regex)
 	if err != nil {

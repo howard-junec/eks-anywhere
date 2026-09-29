@@ -48,6 +48,7 @@ type E2ESession struct {
 	hardware            []*api.Hardware
 	logger              logr.Logger
 	stage               string
+	rufioCandidateImage *mirroredRufioCandidateImage
 }
 
 func newE2ESession(instanceId string, conf instanceRunConf) (*E2ESession, error) {
