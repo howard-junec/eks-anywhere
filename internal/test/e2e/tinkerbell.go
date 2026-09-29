@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -23,6 +24,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	"github.com/aws/aws-sdk-go-v2/service/ecr/types"
 	"github.com/go-logr/logr"
+	godigest "github.com/opencontainers/go-digest"
+	"oras.land/oras-go/v2/errdef"
+	"oras.land/oras-go/v2/registry/remote"
+	"oras.land/oras-go/v2/registry/remote/auth"
 
 	"github.com/aws/eks-anywhere/internal/pkg/api"
 	"github.com/aws/eks-anywhere/internal/pkg/ssm"
@@ -71,6 +76,7 @@ type mirroredRufioCandidateImage struct {
 	bundleImage    string
 	runtimeDigests []string
 	repository     string
+	reference      string
 	digest         string
 }
 
@@ -144,7 +150,7 @@ func (e *E2ESession) setupTinkerbellEnv(testRegex string) error {
 	return nil
 }
 
-func prepareRufioCandidateImage(jobID string) (*mirroredRufioCandidateImage, error) {
+func prepareRufioCandidateImage(jobID string) (candidateImage *mirroredRufioCandidateImage, err error) {
 	sourceImage := strings.TrimSpace(os.Getenv(tinkerbellExpectedImageEnvVar))
 	expectedDigest := strings.TrimSpace(os.Getenv(tinkerbellExpectedImageDigestEnvVar))
 	if strings.TrimSpace(jobID) == "" {
@@ -266,13 +272,38 @@ func prepareRufioCandidateImage(jobID string) (*mirroredRufioCandidateImage, err
 	if _, err := docker.Execute(ctx, "tag", sourceReference, mirrorImage); err != nil {
 		return nil, fmt.Errorf("tagging candidate image for mirror: %w", err)
 	}
-	if _, err := docker.Execute(ctx, "push", mirrorImage); err != nil {
+	pushOutput, err := docker.Execute(ctx, "push", mirrorImage)
+	if err != nil {
 		return nil, fmt.Errorf("pushing candidate image to mirror: %w", err)
 	}
+	candidateImage = &mirroredRufioCandidateImage{
+		mirrorImage: mirrorImage,
+		bundleImage: bundleImage,
+		repository:  repository,
+		reference:   source.tag,
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		rollbackCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if cleanupErr := deleteMirroredRufioCandidateImage(rollbackCtx, mirror, candidateImage); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("rolling back mirrored Rufio candidate image: %w", cleanupErr))
+		}
+	}()
+	pushedDigest, err := dockerPushDigest(pushOutput.String())
+	if err != nil {
+		return nil, fmt.Errorf("reading pushed candidate image digest: %w", err)
+	}
+	candidateImage.digest = pushedDigest
 
 	mirrorDigest, mirrorPlatformDigests, err := inspectRegistryImage(ctx, docker, mirrorImage)
 	if err != nil {
 		return nil, fmt.Errorf("inspecting mirrored candidate image: %w", err)
+	}
+	if mirrorDigest != pushedDigest {
+		return nil, fmt.Errorf("pushed candidate image digest is %q, registry reported %q", pushedDigest, mirrorDigest)
 	}
 	if _, ok := sourcePlatformDigests[mirrorDigest]; !ok && mirrorDigest != expectedDigest {
 		return nil, fmt.Errorf(
@@ -290,13 +321,26 @@ func prepareRufioCandidateImage(jobID string) (*mirroredRufioCandidateImage, err
 	}
 	sort.Strings(runtimeDigests)
 
-	return &mirroredRufioCandidateImage{
-		mirrorImage:    mirrorImage,
-		bundleImage:    bundleImage,
-		runtimeDigests: runtimeDigests,
-		repository:     repository,
-		digest:         mirrorDigest,
-	}, nil
+	candidateImage.runtimeDigests = runtimeDigests
+	return candidateImage, nil
+}
+
+func dockerPushDigest(output string) (string, error) {
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		fields := strings.Fields(lines[i])
+		for j := 0; j+1 < len(fields); j++ {
+			if fields[j] != "digest:" {
+				continue
+			}
+			digest, err := godigest.Parse(fields[j+1])
+			if err != nil {
+				continue
+			}
+			return digest.String(), nil
+		}
+	}
+	return "", fmt.Errorf("docker push output did not report a manifest digest")
 }
 
 func loadTinkerbellRegistryMirrorConfig() (*registryMirrorConfig, error) {
@@ -342,7 +386,16 @@ func (e *E2ESession) cleanupRufioCandidateImage() error {
 	if err != nil {
 		return fmt.Errorf("loading Tinkerbell registry mirror config for cleanup: %w", err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return deleteMirroredRufioCandidateImage(ctx, mirror, e.rufioCandidateImage)
+}
 
+func deleteMirroredRufioCandidateImage(
+	ctx context.Context,
+	mirror *registryMirrorConfig,
+	candidateImage *mirroredRufioCandidateImage,
+) error {
 	roots, err := x509.SystemCertPool()
 	if err != nil || roots == nil {
 		roots = x509.NewCertPool()
@@ -355,33 +408,36 @@ func (e *E2ESession) cleanupRufioCandidateImage() error {
 		MinVersion: tls.VersionTLS12,
 		RootCAs:    roots,
 	}
-	client := &http.Client{
+	httpClient := &http.Client{
 		Transport: transport,
 		Timeout:   2 * time.Minute,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	deleteURL := fmt.Sprintf(
-		"https://%s/v2/%s/manifests/%s",
-		mirror.registry,
-		e.rufioCandidateImage.repository,
-		e.rufioCandidateImage.digest,
-	)
-	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
+	repository, err := remote.NewRepository(mirror.registry + "/" + candidateImage.repository)
 	if err != nil {
-		return fmt.Errorf("creating candidate image cleanup request: %w", err)
+		return fmt.Errorf("creating candidate image repository client: %w", err)
 	}
-	request.SetBasicAuth(mirror.username, mirror.password)
-	response, err := client.Do(request)
+	repository.Client = &auth.Client{
+		Client: httpClient,
+		Cache:  auth.NewCache(),
+		Credential: auth.StaticCredential(mirror.registry, auth.Credential{
+			Username: mirror.username,
+			Password: mirror.password,
+		}),
+	}
+	reference := candidateImage.digest
+	if reference == "" {
+		reference = candidateImage.reference
+	}
+	descriptor, err := repository.Resolve(ctx, reference)
 	if err != nil {
+		if errors.Is(err, errdef.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("resolving mirrored Rufio candidate image for deletion: %w", err)
+	}
+	if err := repository.Delete(ctx, descriptor); err != nil && !errors.Is(err, errdef.ErrNotFound) {
 		return fmt.Errorf("deleting mirrored Rufio candidate image: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusAccepted &&
-		response.StatusCode != http.StatusOK &&
-		response.StatusCode != http.StatusNotFound {
-		return fmt.Errorf("deleting mirrored Rufio candidate image returned %s", response.Status)
 	}
 	return nil
 }
