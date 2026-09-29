@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +26,7 @@ import (
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	rufiov1alpha1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1/thirdparty/tinkerbell/rufio"
 	"github.com/aws/eks-anywhere/pkg/constants"
+	"github.com/aws/eks-anywhere/pkg/executables"
 	releasev1alpha1 "github.com/aws/eks-anywhere/release/api/v1alpha1"
 	"github.com/aws/eks-anywhere/test/framework"
 )
@@ -36,6 +39,7 @@ const (
 	eksaAWSAccessKeyIDEnv               = "EKSA_AWS_ACCESS_KEY_ID"
 	eksaAWSSecretAccessKeyEnv           = "EKSA_AWS_SECRET_ACCESS_KEY"
 	eksaAWSSessionTokenEnv              = "EKSA_AWS_SESSION_TOKEN"
+	rufioJobResource                    = "jobs.bmc.tinkerbell.org"
 	rufioMachineResource                = "machines.bmc.tinkerbell.org"
 	rufioTaskResource                   = "tasks.bmc.tinkerbell.org"
 	rufioRetryLogMessage                = "power-off attempt failed; requeuing"
@@ -85,7 +89,7 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if actualDigest != expectedDigest {
 		t.Fatalf("Candidate image digest is %q, want %q", actualDigest, expectedDigest)
 	}
-	mirroredImage, mirroredBundleImage := mirrorTinkerbellCandidate(
+	mirroredBundleImage, mirroredImageDigests := mirrorTinkerbellCandidate(
 		t,
 		test,
 		expectedImage,
@@ -107,7 +111,7 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 
 	ctx := context.Background()
 	kubeconfig := test.KubeconfigFilePath()
-	assertTinkerbellImage(t, ctx, test, kubeconfig, mirroredImage)
+	assertTinkerbellImage(t, ctx, test, kubeconfig, mirroredBundleImage, mirroredImageDigests)
 
 	connection := spareWorkerConnection(t, ctx, test, kubeconfig)
 	if connection.ProviderOptions != nil && connection.ProviderOptions.RPC != nil {
@@ -116,7 +120,9 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	connectionObject := toUnstructuredConnection(t, connection)
 	namePrefix := test.ClusterName + "-rufio-retry"
 	powerOnTask := namePrefix + "-on"
-	powerOffTask := namePrefix + "-off"
+	powerOffJob := namePrefix + "-off"
+	powerOffTask := powerOffJob + "-task-0"
+	faultMachine := namePrefix + "-machine"
 	cleanupTask := namePrefix + "-cleanup"
 	faultService := namePrefix + "-fault"
 	sparePoweredOff := false
@@ -185,9 +191,16 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if err := test.KubectlClient.Apply(
 		ctx,
 		kubeconfig,
-		newRufioTask(powerOffTask, "off", toUnstructuredConnection(t, faultConnection)),
+		newRufioMachine(faultMachine, toUnstructuredConnection(t, faultConnection)),
 	); err != nil {
-		t.Fatalf("Failed to create fault-injected power-off Task: %v", err)
+		t.Fatalf("Failed to create fault-injected BMC Machine: %v", err)
+	}
+	if err := test.KubectlClient.Apply(
+		ctx,
+		kubeconfig,
+		newRufioJob(powerOffJob, faultMachine, "off"),
+	); err != nil {
+		t.Fatalf("Failed to create fault-injected power-off Job: %v", err)
 	}
 
 	retryingTask, err := waitForRufioTaskCondition(ctx, test, kubeconfig, powerOffTask, "Retrying")
@@ -198,31 +211,25 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if taskUID == "" {
 		t.Fatal("Fault-injected power-off Task has no UID")
 	}
-	initialRetryCount, err := waitForRufioRetryLogCount(ctx, test, kubeconfig, powerOffTask, retryStarted, 1)
+	retryTimes, err := waitForRufioRetryLogTimes(ctx, test, kubeconfig, powerOffTask, retryStarted, 2)
 	if err != nil {
-		t.Fatalf("Power-off Task emitted no retry log: %v", err)
+		t.Fatalf("Power-off Task did not emit two retry logs: %v", err)
 	}
-	stableRetryCount, err := waitForRufioRetryLogCount(
-		ctx,
-		test,
-		kubeconfig,
-		powerOffTask,
-		retryStarted,
-		initialRetryCount+1,
-	)
+	if retryInterval := retryTimes[1].Sub(retryTimes[0]); retryInterval < 28*time.Second {
+		t.Fatalf("Power-off Task retried after %s, below the 30s minimum backoff", retryInterval)
+	}
+
+	restartStarted := time.Now()
+	restartTinkerbellController(t, ctx, test, kubeconfig)
+	restartedTask, err := waitForRufioTaskCondition(ctx, test, kubeconfig, powerOffTask, "Retrying")
 	if err != nil {
-		t.Fatalf("Power-off Task did not emit an additional timer-driven retry log: %v", err)
+		t.Fatalf("Power-off Task did not remain retryable after controller restart: %v", err)
 	}
-	if err := ensureRufioRetryLogsStable(
-		ctx,
-		test,
-		kubeconfig,
-		powerOffTask,
-		retryStarted,
-		stableRetryCount,
-		15*time.Second,
-	); err != nil {
-		t.Fatalf("Power-off Task retried before its minimum backoff elapsed: %v", err)
+	if restartedTask.GetUID() != taskUID {
+		t.Fatalf("Controller restart recreated the Task: got UID %q, want %q", restartedTask.GetUID(), taskUID)
+	}
+	if _, err := waitForRufioRetryLogTimes(ctx, test, kubeconfig, powerOffTask, restartStarted, 1); err != nil {
+		t.Fatalf("Restarted controller did not resume the retrying Task: %v", err)
 	}
 
 	endpoints := &corev1.Endpoints{
@@ -259,9 +266,23 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if completedTask.GetUID() != taskUID {
 		t.Fatalf("Power-off recovery recreated the Task: got UID %q, want %q", completedTask.GetUID(), taskUID)
 	}
+	if _, err := waitForRufioJobCondition(ctx, test, kubeconfig, powerOffJob, "Completed"); err != nil {
+		t.Fatalf("Power-off Job did not complete after its Task recovered: %v", err)
+	}
 	sparePoweredOff = true
 
-	deleteRufioRetryResources(t, ctx, test, kubeconfig, powerOnTask, powerOffTask, cleanupTask, faultService)
+	deleteRufioRetryResources(
+		t,
+		ctx,
+		test,
+		kubeconfig,
+		powerOnTask,
+		powerOffTask,
+		powerOffJob,
+		faultMachine,
+		cleanupTask,
+		faultService,
+	)
 	test.DeleteCluster()
 	test.ValidateHardwareDecommissioned()
 }
@@ -270,7 +291,7 @@ func mirrorTinkerbellCandidate(
 	t *testing.T,
 	test *framework.ClusterE2ETest,
 	sourceImage, sourceDigest, sourceTag string,
-) (targetImage, bundleImage string) {
+) (bundleImage string, runtimeDigests map[string]struct{}) {
 	t.Helper()
 
 	endpoint := os.Getenv(framework.RegistryEndpointTinkerbellVar)
@@ -283,19 +304,73 @@ func mirrorTinkerbellCandidate(
 	}
 
 	imagePath := fmt.Sprintf("eks-anywhere/tinkerbell/tinkerbell:%s", sourceTag)
-	targetImage = fmt.Sprintf(
+	targetImage := fmt.Sprintf(
 		"%s/%s",
 		net.JoinHostPort(endpoint, port),
 		imagePath,
 	)
 	bundleImage = fmt.Sprintf("%s/%s", constants.DefaultCoreEKSARegistry, imagePath)
 	sourceReference := sourceImage + "@" + sourceDigest
+	sourceIndexDigest, sourcePlatformDigests := inspectRegistryImage(t, sourceReference)
+	if sourceIndexDigest != sourceDigest {
+		t.Fatalf("Candidate registry returned digest %q, want %q", sourceIndexDigest, sourceDigest)
+	}
 	test.Run("docker", "pull", sourceReference)
 	test.Run("docker", "tag", sourceReference, targetImage)
 	test.Run("docker", "push", targetImage)
+	targetDigest, targetPlatformDigests := inspectRegistryImage(t, targetImage)
+	if _, ok := sourcePlatformDigests[targetDigest]; !ok && targetDigest != sourceDigest {
+		t.Fatalf("Mirrored image digest %q is not part of candidate image %q", targetDigest, sourceDigest)
+	}
+	runtimeDigests = targetPlatformDigests
+	if len(runtimeDigests) == 0 {
+		runtimeDigests = map[string]struct{}{targetDigest: {}}
+	}
 	setTinkerbellBundleImage(t, targetImage)
 
-	return targetImage, bundleImage
+	return bundleImage, runtimeDigests
+}
+
+func inspectRegistryImage(t *testing.T, image string) (string, map[string]struct{}) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	inspectOutput, err := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", image).CombinedOutput()
+	if err != nil {
+		t.Fatalf("Failed to inspect registry image %q: %v: %s", image, err, strings.TrimSpace(string(inspectOutput)))
+	}
+	var digest string
+	for _, line := range strings.Split(string(inspectOutput), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Digest:") {
+			digest = strings.TrimSpace(strings.TrimPrefix(line, "Digest:"))
+			break
+		}
+	}
+	if digest == "" {
+		t.Fatalf("Registry image %q did not report a digest", image)
+	}
+
+	rawOutput, err := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", "--raw", image).CombinedOutput()
+	if err != nil {
+		t.Fatalf("Failed to inspect raw registry manifest %q: %v: %s", image, err, strings.TrimSpace(string(rawOutput)))
+	}
+	var manifest struct {
+		Manifests []struct {
+			Digest string `json:"digest"`
+		} `json:"manifests"`
+	}
+	if err := json.Unmarshal(rawOutput, &manifest); err != nil {
+		t.Fatalf("Failed to parse registry manifest for %q: %v", image, err)
+	}
+	platformDigests := make(map[string]struct{}, len(manifest.Manifests))
+	for _, descriptor := range manifest.Manifests {
+		if descriptor.Digest != "" {
+			platformDigests[descriptor.Digest] = struct{}{}
+		}
+	}
+	return digest, platformDigests
 }
 
 func setTinkerbellBundleImage(t *testing.T, image string) {
@@ -334,22 +409,74 @@ func parseECRImage(t *testing.T, image string) (registry, repository, tag string
 	return image[:slashIndex], image[slashIndex+1 : tagIndex], image[tagIndex+1:]
 }
 
-func assertTinkerbellImage(t *testing.T, ctx context.Context, test *framework.ClusterE2ETest, kubeconfig, expected string) {
+func assertTinkerbellImage(
+	t *testing.T,
+	ctx context.Context,
+	test *framework.ClusterE2ETest,
+	kubeconfig, expected string,
+	expectedDigests map[string]struct{},
+) {
 	t.Helper()
 	deployment, err := test.KubectlClient.GetDeployment(ctx, "tinkerbell", constants.EksaSystemNamespace, kubeconfig)
 	if err != nil {
 		t.Fatalf("Failed to get Tinkerbell deployment: %v", err)
 	}
+	foundContainer := false
 	for _, container := range deployment.Spec.Template.Spec.Containers {
 		if container.Name != "tinkerbell" {
 			continue
 		}
+		foundContainer = true
 		if container.Image != expected {
 			t.Fatalf("Tinkerbell deployment uses %q, want candidate image %q", container.Image, expected)
 		}
-		return
+		break
 	}
-	t.Fatal("Tinkerbell deployment has no tinkerbell container")
+	if !foundContainer {
+		t.Fatal("Tinkerbell deployment has no tinkerbell container")
+	}
+
+	pods, err := test.KubectlClient.GetPods(
+		ctx,
+		executables.WithKubeconfig(kubeconfig),
+		executables.WithNamespace(constants.EksaSystemNamespace),
+		executables.WithSelector("app=tinkerbell"),
+	)
+	if err != nil {
+		t.Fatalf("Failed to get Tinkerbell pods: %v", err)
+	}
+	for _, pod := range pods {
+		for _, status := range pod.Status.ContainerStatuses {
+			if status.Name != "tinkerbell" || !status.Ready {
+				continue
+			}
+			digest := digestFromImageID(status.ImageID)
+			if _, ok := expectedDigests[digest]; !ok {
+				t.Fatalf("Tinkerbell pod resolved image digest %q, want one of %v", digest, mapKeys(expectedDigests))
+			}
+			return
+		}
+	}
+	t.Fatal("No ready Tinkerbell container was found")
+}
+
+func digestFromImageID(imageID string) string {
+	if index := strings.LastIndex(imageID, "@"); index >= 0 {
+		return imageID[index+1:]
+	}
+	if index := strings.LastIndex(imageID, "sha256:"); index >= 0 {
+		return imageID[index:]
+	}
+	return imageID
+}
+
+func mapKeys(values map[string]struct{}) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func spareWorkerConnection(t *testing.T, ctx context.Context, test *framework.ClusterE2ETest, kubeconfig string) rufiov1alpha1.Connection {
@@ -417,6 +544,46 @@ func newRufioTask(name, powerAction string, connection map[string]any) *unstruct
 	}
 }
 
+func newRufioMachine(name string, connection map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "bmc.tinkerbell.org/v1alpha1",
+			"kind":       "Machine",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": constants.EksaSystemNamespace,
+			},
+			"spec": map[string]any{
+				"connection": connection,
+			},
+		},
+	}
+}
+
+func newRufioJob(name, machineName, powerAction string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "bmc.tinkerbell.org/v1alpha1",
+			"kind":       "Job",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": constants.EksaSystemNamespace,
+			},
+			"spec": map[string]any{
+				"machineRef": map[string]any{
+					"name":      machineName,
+					"namespace": constants.EksaSystemNamespace,
+				},
+				"tasks": []any{
+					map[string]any{
+						"powerAction": powerAction,
+					},
+				},
+			},
+		},
+	}
+}
+
 func waitForRufioTaskCondition(
 	ctx context.Context,
 	test *framework.ClusterE2ETest,
@@ -433,7 +600,7 @@ func waitForRufioTaskCondition(
 			kubeconfig,
 			task,
 		); err != nil {
-			return false, err
+			return false, nil
 		}
 		if conditionTrue(task, "Failed") && conditionType != "Failed" {
 			return false, fmt.Errorf("Task %s unexpectedly failed: %s", taskName, conditionMessage(task, "Failed"))
@@ -444,6 +611,35 @@ func waitForRufioTaskCondition(
 		return task, err
 	}
 	return task, nil
+}
+
+func waitForRufioJobCondition(
+	ctx context.Context,
+	test *framework.ClusterE2ETest,
+	kubeconfig, jobName, conditionType string,
+) (*unstructured.Unstructured, error) {
+	var job *unstructured.Unstructured
+	err := wait.PollUntilContextTimeout(ctx, 3*time.Second, 4*time.Minute, true, func(ctx context.Context) (bool, error) {
+		job = &unstructured.Unstructured{}
+		if err := test.KubectlClient.GetObject(
+			ctx,
+			rufioJobResource,
+			jobName,
+			constants.EksaSystemNamespace,
+			kubeconfig,
+			job,
+		); err != nil {
+			return false, nil
+		}
+		if conditionTrue(job, "Failed") && conditionType != "Failed" {
+			return false, fmt.Errorf("Job %s unexpectedly failed: %s", jobName, conditionMessage(job, "Failed"))
+		}
+		return conditionTrue(job, conditionType), nil
+	})
+	if err != nil {
+		return job, err
+	}
+	return job, nil
 }
 
 func conditionTrue(task *unstructured.Unstructured, conditionType string) bool {
@@ -473,67 +669,101 @@ func conditionMessage(task *unstructured.Unstructured, conditionType string) str
 	return ""
 }
 
-func waitForRufioRetryLogCount(
+func waitForRufioRetryLogTimes(
 	ctx context.Context,
 	test *framework.ClusterE2ETest,
 	kubeconfig, taskName string,
 	since time.Time,
 	want int,
-) (int, error) {
-	count := 0
+) ([]time.Time, error) {
+	var retryTimes []time.Time
 	err := wait.PollUntilContextTimeout(ctx, 5*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
 		var err error
-		count, err = rufioRetryLogCount(ctx, test, kubeconfig, taskName, since)
+		retryTimes, err = rufioRetryLogTimes(ctx, test, kubeconfig, taskName, since)
 		if err != nil {
 			return false, nil
 		}
-		return count >= want, nil
+		return len(retryTimes) >= want, nil
 	})
-	return count, err
+	return retryTimes, err
 }
 
-func ensureRufioRetryLogsStable(
+func rufioRetryLogTimes(
 	ctx context.Context,
 	test *framework.ClusterE2ETest,
 	kubeconfig, taskName string,
 	since time.Time,
-	want int,
-	duration time.Duration,
-) error {
-	stableSince := time.Now()
-	return wait.PollUntilContextTimeout(ctx, 2*time.Second, duration+10*time.Second, true, func(ctx context.Context) (bool, error) {
-		count, err := rufioRetryLogCount(ctx, test, kubeconfig, taskName, since)
-		if err != nil {
-			return false, nil
-		}
-		if count != want {
-			return false, fmt.Errorf("retry log count changed from %d to %d during the quiet period", want, count)
-		}
-		return time.Since(stableSince) >= duration, nil
-	})
-}
-
-func rufioRetryLogCount(
-	ctx context.Context,
-	test *framework.ClusterE2ETest,
-	kubeconfig, taskName string,
-	since time.Time,
-) (int, error) {
+) ([]time.Time, error) {
 	pod, err := test.KubectlClient.GetPodNameByLabel(ctx, constants.EksaSystemNamespace, "app=tinkerbell", kubeconfig)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	logs, err := test.KubectlClient.GetPodLogsSince(ctx, constants.EksaSystemNamespace, pod, "tinkerbell", kubeconfig, since)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	count := 0
+	retryTimes := make([]time.Time, 0)
 	for _, line := range strings.Split(logs, "\n") {
-		if strings.Contains(line, taskName) && strings.Contains(line, rufioRetryLogMessage) {
-			count++
+		if !strings.Contains(line, taskName) || !strings.Contains(line, rufioRetryLogMessage) {
+			continue
 		}
+		var entry struct {
+			Time string `json:"time"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			return nil, fmt.Errorf("parsing Rufio retry log: %w", err)
+		}
+		logTime, err := time.Parse(time.RFC3339Nano, entry.Time)
+		if err != nil {
+			return nil, fmt.Errorf("parsing Rufio retry log time %q: %w", entry.Time, err)
+		}
+		retryTimes = append(retryTimes, logTime)
 	}
-	return count, nil
+	sort.Slice(retryTimes, func(i, j int) bool {
+		return retryTimes[i].Before(retryTimes[j])
+	})
+	return retryTimes, nil
+}
+
+func restartTinkerbellController(
+	t *testing.T,
+	ctx context.Context,
+	test *framework.ClusterE2ETest,
+	kubeconfig string,
+) {
+	t.Helper()
+	oldPod, err := test.KubectlClient.GetPodNameByLabel(ctx, constants.EksaSystemNamespace, "app=tinkerbell", kubeconfig)
+	if err != nil {
+		t.Fatalf("Failed to find Tinkerbell pod before restart: %v", err)
+	}
+	if _, err := test.KubectlClient.ExecuteCommand(
+		ctx,
+		"delete",
+		"pod",
+		oldPod,
+		"--namespace", constants.EksaSystemNamespace,
+		"--kubeconfig", kubeconfig,
+		"--wait=true",
+	); err != nil {
+		t.Fatalf("Failed to restart Tinkerbell controller: %v", err)
+	}
+	if err := test.KubectlClient.WaitForResourceRolledout(
+		ctx,
+		test.Cluster(),
+		"5m",
+		"tinkerbell",
+		constants.EksaSystemNamespace,
+		"deployment",
+	); err != nil {
+		t.Fatalf("Tinkerbell controller did not become ready after restart: %v", err)
+	}
+	newPod, err := test.KubectlClient.GetPodNameByLabel(ctx, constants.EksaSystemNamespace, "app=tinkerbell", kubeconfig)
+	if err != nil {
+		t.Fatalf("Failed to find Tinkerbell pod after restart: %v", err)
+	}
+	if newPod == oldPod {
+		t.Fatalf("Tinkerbell controller pod %q was not replaced", oldPod)
+	}
 }
 
 func deleteRufioRetryResources(
@@ -541,7 +771,7 @@ func deleteRufioRetryResources(
 	ctx context.Context,
 	test *framework.ClusterE2ETest,
 	kubeconfig string,
-	powerOnTask, powerOffTask, cleanupTask, faultService string,
+	powerOnTask, powerOffTask, powerOffJob, faultMachine, cleanupTask, faultService string,
 ) {
 	t.Helper()
 	for _, resource := range []struct {
@@ -549,7 +779,9 @@ func deleteRufioRetryResources(
 		name string
 	}{
 		{rufioTaskResource, powerOnTask},
+		{rufioJobResource, powerOffJob},
 		{rufioTaskResource, powerOffTask},
+		{rufioMachineResource, faultMachine},
 		{rufioTaskResource, cleanupTask},
 		{"endpoints", faultService},
 		{"service", faultService},
