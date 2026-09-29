@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecr/types"
 	"github.com/go-logr/logr"
 	godigest "github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry/remote"
@@ -260,7 +262,7 @@ func prepareRufioCandidateImage(jobID string) (candidateImage *mirroredRufioCand
 	}
 
 	sourceReference := sourceImage + "@" + expectedDigest
-	sourceDigest, sourcePlatformDigests, err := inspectRegistryImage(ctx, docker, sourceReference)
+	sourceDigest, _, err := inspectRegistryImage(ctx, docker, sourceReference)
 	if err != nil {
 		return nil, fmt.Errorf("inspecting candidate image: %w", err)
 	}
@@ -269,6 +271,10 @@ func prepareRufioCandidateImage(jobID string) (candidateImage *mirroredRufioCand
 	}
 	if err := docker.PullImage(ctx, sourceReference); err != nil {
 		return nil, fmt.Errorf("pulling candidate image: %w", err)
+	}
+	sourceConfigDigest, err := dockerImageConfigDigest(ctx, docker, sourceReference)
+	if err != nil {
+		return nil, fmt.Errorf("reading candidate image config digest: %w", err)
 	}
 	if _, err := docker.Execute(ctx, "tag", sourceReference, mirrorImage); err != nil {
 		return nil, fmt.Errorf("tagging candidate image for mirror: %w", err)
@@ -300,18 +306,22 @@ func prepareRufioCandidateImage(jobID string) (candidateImage *mirroredRufioCand
 	}
 	candidateImage.digest = pushedDigest
 
-	mirrorDigest, mirrorPlatformDigests, err := inspectMirroredRufioCandidateImage(ctx, mirror, candidateImage)
+	mirrorDigest, mirrorPlatformDigests, mirrorConfigDigest, err := inspectMirroredRufioCandidateImage(
+		ctx,
+		mirror,
+		candidateImage,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("inspecting mirrored candidate image: %w", err)
 	}
 	if mirrorDigest != pushedDigest {
 		return nil, fmt.Errorf("pushed candidate image digest is %q, registry reported %q", pushedDigest, mirrorDigest)
 	}
-	if _, ok := sourcePlatformDigests[mirrorDigest]; !ok && mirrorDigest != expectedDigest {
+	if mirrorConfigDigest != sourceConfigDigest {
 		return nil, fmt.Errorf(
-			"mirrored image digest %q is not part of candidate image %q",
-			mirrorDigest,
-			expectedDigest,
+			"mirrored image config digest is %q, want candidate config digest %q",
+			mirrorConfigDigest,
+			sourceConfigDigest,
 		)
 	}
 	if len(mirrorPlatformDigests) == 0 {
@@ -426,37 +436,66 @@ func inspectMirroredRufioCandidateImage(
 	ctx context.Context,
 	mirror *registryMirrorConfig,
 	candidateImage *mirroredRufioCandidateImage,
-) (string, map[string]struct{}, error) {
+) (string, map[string]struct{}, string, error) {
 	repository, err := newMirroredRufioRepository(mirror, candidateImage.repository)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	descriptor, err := repository.Resolve(ctx, candidateImage.reference)
 	if err != nil {
-		return "", nil, fmt.Errorf("resolving mirrored Rufio candidate image: %w", err)
+		return "", nil, "", fmt.Errorf("resolving mirrored Rufio candidate image: %w", err)
 	}
 	manifestData, err := content.FetchAll(ctx, repository, descriptor)
 	if err != nil {
-		return "", nil, fmt.Errorf("fetching mirrored Rufio candidate manifest: %w", err)
+		return "", nil, "", fmt.Errorf("fetching mirrored Rufio candidate manifest: %w", err)
 	}
 	var manifest struct {
-		Manifests []struct {
-			Digest string `json:"digest"`
-		} `json:"manifests"`
+		Config    ocispec.Descriptor   `json:"config"`
+		Manifests []ocispec.Descriptor `json:"manifests"`
 	}
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return "", nil, fmt.Errorf("parsing mirrored Rufio candidate manifest: %w", err)
+		return "", nil, "", fmt.Errorf("parsing mirrored Rufio candidate manifest: %w", err)
 	}
 	platformDigests := make(map[string]struct{}, len(manifest.Manifests))
 	for _, platform := range manifest.Manifests {
-		if platform.Digest != "" {
-			platformDigests[platform.Digest] = struct{}{}
+		if platform.Digest.String() != "" {
+			platformDigests[platform.Digest.String()] = struct{}{}
 		}
+	}
+	configDigest := manifest.Config.Digest.String()
+	if configDigest == "" && len(manifest.Manifests) > 0 {
+		var platformDescriptor *ocispec.Descriptor
+		for i := range manifest.Manifests {
+			platform := manifest.Manifests[i].Platform
+			if platform != nil && platform.OS == runtime.GOOS && platform.Architecture == runtime.GOARCH {
+				platformDescriptor = &manifest.Manifests[i]
+				break
+			}
+		}
+		if platformDescriptor == nil {
+			return "", nil, "", fmt.Errorf(
+				"mirrored candidate image has no manifest for %s/%s",
+				runtime.GOOS,
+				runtime.GOARCH,
+			)
+		}
+		platformManifestData, err := content.FetchAll(ctx, repository, *platformDescriptor)
+		if err != nil {
+			return "", nil, "", fmt.Errorf("fetching mirrored Rufio platform manifest: %w", err)
+		}
+		var platformManifest ocispec.Manifest
+		if err := json.Unmarshal(platformManifestData, &platformManifest); err != nil {
+			return "", nil, "", fmt.Errorf("parsing mirrored Rufio platform manifest: %w", err)
+		}
+		configDigest = platformManifest.Config.Digest.String()
+	}
+	if configDigest == "" {
+		return "", nil, "", fmt.Errorf("mirrored candidate image has no config digest")
 	}
 	if len(platformDigests) == 0 {
 		platformDigests[descriptor.Digest.String()] = struct{}{}
 	}
-	return descriptor.Digest.String(), platformDigests, nil
+	return descriptor.Digest.String(), platformDigests, configDigest, nil
 }
 
 func newMirroredRufioRepository(
@@ -515,6 +554,22 @@ func parsePrivateECRImage(image string) (privateECRImage, error) {
 		repository: image[slashIndex+1 : tagIndex],
 		tag:        image[tagIndex+1:],
 	}, nil
+}
+
+func dockerImageConfigDigest(
+	ctx context.Context,
+	docker *executables.Docker,
+	image string,
+) (string, error) {
+	output, err := docker.Execute(ctx, "image", "inspect", "--format", "{{.Id}}", image)
+	if err != nil {
+		return "", err
+	}
+	digest, err := godigest.Parse(strings.TrimSpace(output.String()))
+	if err != nil {
+		return "", fmt.Errorf("parsing Docker image ID: %w", err)
+	}
+	return digest.String(), nil
 }
 
 func inspectRegistryImage(
