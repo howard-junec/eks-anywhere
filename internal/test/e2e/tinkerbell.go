@@ -282,16 +282,17 @@ func prepareRufioCandidateImage(jobID string) (candidateImage *mirroredRufioCand
 		repository:  repository,
 		reference:   source.tag,
 	}
-	defer func() {
+	rollbackImage := candidateImage
+	defer func(image *mirroredRufioCandidateImage) {
 		if err == nil {
 			return
 		}
 		rollbackCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if cleanupErr := deleteMirroredRufioCandidateImage(rollbackCtx, mirror, candidateImage); cleanupErr != nil {
+		if cleanupErr := deleteMirroredRufioCandidateImage(rollbackCtx, mirror, image); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("rolling back mirrored Rufio candidate image: %w", cleanupErr))
 		}
-	}()
+	}(rollbackImage)
 	pushedDigest, err := dockerPushDigest(pushOutput.String())
 	if err != nil {
 		return nil, fmt.Errorf("reading pushed candidate image digest: %w", err)
@@ -396,6 +397,9 @@ func deleteMirroredRufioCandidateImage(
 	mirror *registryMirrorConfig,
 	candidateImage *mirroredRufioCandidateImage,
 ) error {
+	if candidateImage == nil {
+		return nil
+	}
 	roots, err := x509.SystemCertPool()
 	if err != nil || roots == nil {
 		roots = x509.NewCertPool()
