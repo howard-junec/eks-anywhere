@@ -296,6 +296,10 @@ func (s *Installer) installSmeeOnDocker(ctx context.Context, bundle releasev1alp
 		"-e", fmt.Sprintf("TINKERBELL_SYSLOG_BIND_ADDR=%s", tinkServerIP),
 	}
 
+	if publicIPv6 := os.Getenv(tinkerbellPublicIPv6OverrideEnvVar); publicIPv6 != "" {
+		flags = append(flags, "-e", fmt.Sprintf("TINKERBELL_PUBLIC_IPV6=%s", publicIPv6))
+	}
+
 	// Mono-repo binary uses env vars only, no command line args
 	cmd := []string{}
 	if err := s.docker.Run(ctx, s.localRegistryURL(bundle.Boots.URI), smee, cmd, flags...); err != nil {
