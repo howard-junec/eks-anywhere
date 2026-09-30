@@ -1,15 +1,12 @@
 package e2e
 
 import (
-	"bytes"
 	"fmt"
-	"net"
 	"path/filepath"
 	"strings"
 
 	"github.com/go-logr/logr"
 
-	"github.com/aws/eks-anywhere/internal/pkg/api"
 	"github.com/aws/eks-anywhere/internal/pkg/s3"
 	"github.com/aws/eks-anywhere/internal/pkg/ssm"
 	e2etests "github.com/aws/eks-anywhere/test/framework"
@@ -61,6 +58,27 @@ section "cloud-init output"
 tail -n 4000 /var/log/cloud-init-output.log
 
 exit 0
+`
+
+const rufioRetryControlPlaneHostScript = `import csv
+import ipaddress
+import sys
+
+with open(sys.argv[1], newline="") as inventory:
+    for row in csv.DictReader(inventory):
+        labels = {}
+        for pair in row.get("labels", "").split("|"):
+            if "=" in pair:
+                key, value = pair.split("=", 1)
+                labels[key.strip()] = value.strip()
+        if labels.get("type") != "control-plane":
+            continue
+
+        address = ipaddress.ip_address(row["ip_address"].strip())
+        print(f"[{address}]" if address.version == 6 else address)
+        break
+    else:
+        raise SystemExit("generated hardware inventory has no control-plane hardware")
 `
 
 func (e *E2ESession) uploadGeneratedFilesFromInstance(testName string) {
@@ -130,22 +148,16 @@ func (e *E2ESession) collectRufioRetryNodeDiagnostics(testName string) {
 		return
 	}
 
-	controlPlane, err := e.rufioRetryControlPlaneHardware(testName)
-	if err != nil {
-		e.logger.Error(err, "Cannot collect Rufio retry node diagnostics")
-		return
-	}
-
-	outputDir := filepath.Join(
+	clusterDir := filepath.Join(
 		e2eHomeFolder,
 		e.clusterName(e.branchName, e.instanceId, testName),
+	)
+	inventoryPath := filepath.Join(clusterDir, "hardware.csv")
+	outputDir := filepath.Join(
+		clusterDir,
 		"physical-node-diagnostics",
 	)
-	command, err := rufioRetryNodeDiagnosticsCommand(controlPlane.IPAddress, outputDir)
-	if err != nil {
-		e.logger.Error(err, "Cannot build Rufio retry node diagnostic command")
-		return
-	}
+	command := rufioRetryNodeDiagnosticsFromInventoryCommand(inventoryPath, outputDir)
 
 	e.logger.Info("Collecting read-only diagnostics from the Tinkerbell control-plane node")
 	if err := ssm.Run(e.session, logr.Discard(), e.instanceId, command, ssmTimeout); err != nil {
@@ -155,81 +167,27 @@ func (e *E2ESession) collectRufioRetryNodeDiagnostics(testName string) {
 	e.logger.Info("Collected Tinkerbell control-plane node diagnostics")
 }
 
-func (e *E2ESession) rufioRetryControlPlaneHardware(testName string) (*api.Hardware, error) {
-	if controlPlane, ok := findControlPlaneHardware(e.hardware); ok {
-		return controlPlane, nil
-	}
-
-	inventoryPath := filepath.Join(
-		e2eHomeFolder,
-		e.clusterName(e.branchName, e.instanceId, testName),
-		"hardware.csv",
-	)
-	output, err := ssm.RunCommand(
-		e.session,
-		logr.Discard(),
-		e.instanceId,
-		"cat "+shellQuote(inventoryPath),
-		ssmTimeout,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("reading generated hardware inventory: %w", err)
-	}
-	if !output.Successful() {
-		return nil, fmt.Errorf(
-			"reading generated hardware inventory returned status %s",
-			output.StatusDetails(),
-		)
-	}
-
-	return controlPlaneHardwareFromCSV(output.StdOut)
-}
-
-func controlPlaneHardwareFromCSV(data []byte) (*api.Hardware, error) {
-	hardware, err := api.NewHardwareSlice(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("parsing generated hardware inventory: %w", err)
-	}
-	controlPlane, ok := findControlPlaneHardware(hardware)
-	if !ok {
-		return nil, fmt.Errorf("generated hardware inventory has no control-plane hardware")
-	}
-	return controlPlane, nil
-}
-
-func findControlPlaneHardware(hardware []*api.Hardware) (*api.Hardware, bool) {
-	for _, machine := range hardware {
-		if machine != nil && machine.Labels.Get(api.HardwareLabelTypeKeyName) == api.ControlPlane {
-			return machine, true
-		}
-	}
-	return nil, false
-}
-
-func rufioRetryNodeDiagnosticsCommand(ipAddress, outputDir string) (string, error) {
-	ipAddress = strings.TrimSpace(ipAddress)
-	ip := net.ParseIP(ipAddress)
-	if ip == nil {
-		return "", fmt.Errorf("invalid control-plane IP address %q", ipAddress)
-	}
-
-	sshHost := ipAddress
-	if ip.To4() == nil {
-		sshHost = "[" + ipAddress + "]"
-	}
-	outputFile := filepath.Join(outputDir, "control-plane.log")
-
+func rufioRetryNodeDiagnosticsFromInventoryCommand(inventoryPath, outputDir string) string {
 	return fmt.Sprintf(
-		"mkdir -p %s && timeout 5m ssh -i %s "+
+		"CONTROL_PLANE_HOST=$(%s) && "+
+			"mkdir -p %s && timeout 5m ssh -i %s "+
 			"-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no "+
-			"-o UserKnownHostsFile=/dev/null ec2-user@%s 'sudo -n bash -s' "+
+			"-o UserKnownHostsFile=/dev/null ec2-user@\"$CONTROL_PLANE_HOST\" 'sudo -n bash -s' "+
 			"> %s 2>&1 <<'RUFIO_NODE_DIAGNOSTICS'\n%s\nRUFIO_NODE_DIAGNOSTICS",
+		rufioRetryControlPlaneHostCommand(inventoryPath),
 		shellQuote(outputDir),
 		shellQuote(e2etests.SSHKeyPath),
-		sshHost,
-		shellQuote(outputFile),
+		shellQuote(filepath.Join(outputDir, "control-plane.log")),
 		rufioRetryNodeDiagnosticsScript,
-	), nil
+	)
+}
+
+func rufioRetryControlPlaneHostCommand(inventoryPath string) string {
+	return fmt.Sprintf(
+		"python3 - %s <<'RUFIO_HARDWARE_INVENTORY'\n%s\nRUFIO_HARDWARE_INVENTORY",
+		shellQuote(inventoryPath),
+		rufioRetryControlPlaneHostScript,
+	)
 }
 
 func shellQuote(value string) string {

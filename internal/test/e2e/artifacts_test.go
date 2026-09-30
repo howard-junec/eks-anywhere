@@ -2,124 +2,49 @@ package e2e
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
-
-	"github.com/aws/eks-anywhere/internal/pkg/api"
 )
 
-func TestFindControlPlaneHardware(t *testing.T) {
-	g := NewWithT(t)
-	controlPlane := &api.Hardware{
-		IPAddress: "192.0.2.10",
-		Labels: map[string]string{
-			api.HardwareLabelTypeKeyName: api.ControlPlane,
-		},
-	}
-	worker := &api.Hardware{
-		IPAddress: "192.0.2.11",
-		Labels: map[string]string{
-			api.HardwareLabelTypeKeyName: api.Worker,
-		},
-	}
-
-	got, ok := findControlPlaneHardware([]*api.Hardware{worker, nil, controlPlane})
-
-	g.Expect(ok).To(BeTrue())
-	g.Expect(got).To(BeIdenticalTo(controlPlane))
-}
-
-func TestFindControlPlaneHardwareNotFound(t *testing.T) {
+func TestRufioRetryNodeDiagnosticsFromInventoryCommand(t *testing.T) {
 	g := NewWithT(t)
 
-	got, ok := findControlPlaneHardware([]*api.Hardware{
-		{
-			IPAddress: "192.0.2.11",
-			Labels: map[string]string{
-				api.HardwareLabelTypeKeyName: api.Worker,
-			},
-		},
-	})
-
-	g.Expect(ok).To(BeFalse())
-	g.Expect(got).To(BeNil())
-}
-
-func TestControlPlaneHardwareFromCSV(t *testing.T) {
-	g := NewWithT(t)
-	inventoryPath := filepath.Join(t.TempDir(), "hardware.csv")
-	controlPlane := &api.Hardware{
-		IPAddress: "192.0.2.10",
-		Labels: map[string]string{
-			api.HardwareLabelTypeKeyName: api.ControlPlane,
-		},
-	}
-	worker := &api.Hardware{
-		IPAddress: "192.0.2.11",
-		Labels: map[string]string{
-			api.HardwareLabelTypeKeyName: api.Worker,
-		},
-	}
-
-	g.Expect(api.WriteHardwareSliceToCSV([]*api.Hardware{worker, controlPlane}, inventoryPath)).To(Succeed())
-	data, err := os.ReadFile(inventoryPath)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	got, err := controlPlaneHardwareFromCSV(data)
-
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(got.IPAddress).To(Equal(controlPlane.IPAddress))
-	g.Expect(got.Labels.Get(api.HardwareLabelTypeKeyName)).To(Equal(api.ControlPlane))
-}
-
-func TestControlPlaneHardwareFromCSVRequiresControlPlane(t *testing.T) {
-	g := NewWithT(t)
-	inventoryPath := filepath.Join(t.TempDir(), "hardware.csv")
-	worker := &api.Hardware{
-		IPAddress: "192.0.2.11",
-		Labels: map[string]string{
-			api.HardwareLabelTypeKeyName: api.Worker,
-		},
-	}
-
-	g.Expect(api.WriteHardwareSliceToCSV([]*api.Hardware{worker}, inventoryPath)).To(Succeed())
-	data, err := os.ReadFile(inventoryPath)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	_, err = controlPlaneHardwareFromCSV(data)
-
-	g.Expect(err).To(MatchError(ContainSubstring("no control-plane hardware")))
-}
-
-func TestRufioRetryNodeDiagnosticsCommand(t *testing.T) {
-	g := NewWithT(t)
-
-	command, err := rufioRetryNodeDiagnosticsCommand(
-		"192.0.2.10",
+	command := rufioRetryNodeDiagnosticsFromInventoryCommand(
+		"/home/e2e/test-cluster/hardware.csv",
 		"/home/e2e/test-cluster/physical-node-diagnostics",
 	)
 
+	g.Expect(command).To(ContainSubstring("csv.DictReader"))
+	g.Expect(command).To(ContainSubstring(`labels.get("type") != "control-plane"`))
+	g.Expect(command).To(ContainSubstring("ipaddress.ip_address"))
+	g.Expect(command).To(ContainSubstring("ec2-user@\"$CONTROL_PLANE_HOST\""))
+	g.Expect(command).NotTo(ContainSubstring("cat "))
+	g.Expect(command).NotTo(ContainSubstring("bmc_password"))
+
+	syntaxCheck := exec.Command("bash", "-n")
+	syntaxCheck.Stdin = strings.NewReader(command)
+	output, err := syntaxCheck.CombinedOutput()
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(command).To(ContainSubstring("ec2-user@192.0.2.10"))
-	g.Expect(command).To(ContainSubstring("cloud-init status --long"))
-	g.Expect(command).To(ContainSubstring("journalctl -b --no-pager"))
-	g.Expect(command).To(ContainSubstring("crictl ps -a"))
-	g.Expect(command).To(ContainSubstring(
-		"'/home/e2e/test-cluster/physical-node-diagnostics/control-plane.log'",
-	))
-	g.Expect(strings.Count(command, "RUFIO_NODE_DIAGNOSTICS")).To(Equal(2))
+	g.Expect(output).To(BeEmpty())
 }
 
-func TestRufioRetryNodeDiagnosticsCommandRejectsInvalidIP(t *testing.T) {
+func TestRufioRetryControlPlaneHostCommand(t *testing.T) {
 	g := NewWithT(t)
+	inventoryPath := filepath.Join(t.TempDir(), "hardware.csv")
+	inventory := `hostname,ip_address,netmask,gateway,nameservers,mac,disk,labels,bmc_ip,bmc_username,bmc_password,vlan_id
+worker,192.0.2.11,,,,,,type=worker,,worker-user,worker-secret,
+control-plane,192.0.2.10,,,,,,type=control-plane,,cp-user,"cp,secret",
+`
+	g.Expect(os.WriteFile(inventoryPath, []byte(inventory), 0o600)).To(Succeed())
 
-	_, err := rufioRetryNodeDiagnosticsCommand(
-		"192.0.2.10; touch /tmp/unsafe",
-		"/home/e2e/test-cluster/physical-node-diagnostics",
-	)
+	output, err := exec.Command("bash", "-c", rufioRetryControlPlaneHostCommand(inventoryPath)).CombinedOutput()
 
-	g.Expect(err).To(MatchError(ContainSubstring("invalid control-plane IP address")))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(strings.TrimSpace(string(output))).To(Equal("192.0.2.10"))
+	g.Expect(string(output)).NotTo(ContainSubstring("cp-user"))
+	g.Expect(string(output)).NotTo(ContainSubstring("cp,secret"))
 }

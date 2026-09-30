@@ -40,6 +40,10 @@ const (
 	rufioMachineResource                = "machines.bmc.tinkerbell.org"
 	rufioTaskResource                   = "tasks.bmc.tinkerbell.org"
 	rufioRetryLogMessage                = "power-off attempt failed; requeuing"
+	rufioRetryInitialInterval           = 30 * time.Second
+	rufioRetryMaxInterval               = 5 * time.Minute
+	rufioRetryStepInterval              = 2 * time.Minute
+	rufioRetryJitter                    = 10 * time.Second
 )
 
 func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing.T) {
@@ -180,6 +184,7 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if taskUID == "" {
 		t.Fatal("Fault-injected power-off Task has no UID")
 	}
+	taskStartTime := rufioTaskStartTime(t, retryingTask)
 	tinkerbellPod, err := test.KubectlClient.GetPodNameByLabel(
 		ctx,
 		constants.EksaSystemNamespace,
@@ -193,8 +198,8 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if err != nil {
 		t.Fatalf("Power-off Task did not emit two retry logs: %v", err)
 	}
-	assertInitialRufioRetryBackoff(t, retryLogs[0])
-	assertInitialRufioRetryBackoff(t, retryLogs[1])
+	assertRufioRetryBackoff(t, taskStartTime, retryLogs[0])
+	assertRufioRetryBackoff(t, taskStartTime, retryLogs[1])
 	if retryInterval := retryLogs[1].Time.Sub(retryLogs[0].Time); retryInterval+2*time.Second < retryLogs[0].RequeueAfter {
 		t.Fatalf(
 			"Power-off Task retried after %s, earlier than its scheduled %s backoff",
@@ -224,7 +229,7 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if err != nil {
 		t.Fatalf("Restarted controller did not resume the retrying Task: %v", err)
 	}
-	assertInitialRufioRetryBackoff(t, resumedRetryLogs[0])
+	assertRufioRetryBackoff(t, taskStartTime, resumedRetryLogs[0])
 
 	endpoints := &corev1.Endpoints{
 		TypeMeta: metav1.TypeMeta{
@@ -691,13 +696,78 @@ func TestParseRufioRetryDuration(t *testing.T) {
 	}
 }
 
-func assertInitialRufioRetryBackoff(t *testing.T, retryLog rufioRetryLog) {
+func rufioTaskStartTime(t *testing.T, task *unstructured.Unstructured) time.Time {
 	t.Helper()
-	if retryLog.RequeueAfter < 30*time.Second || retryLog.RequeueAfter > 40*time.Second {
+	value, found, err := unstructured.NestedString(task.Object, "status", "startTime")
+	if err != nil {
+		t.Fatalf("Reading Power-off Task startTime: %v", err)
+	}
+	if !found {
+		t.Fatal("Power-off Task has no status.startTime")
+	}
+	startTime, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		t.Fatalf("Parsing Power-off Task startTime %q: %v", value, err)
+	}
+	return startTime
+}
+
+func assertRufioRetryBackoff(t *testing.T, taskStartTime time.Time, retryLog rufioRetryLog) {
+	t.Helper()
+	minimum, maximum := rufioRetryBackoffRange(taskStartTime, retryLog.Time)
+	elapsed := retryLog.Time.Sub(taskStartTime)
+	if retryLog.RequeueAfter < minimum || retryLog.RequeueAfter > maximum {
 		t.Fatalf(
-			"Power-off Task scheduled %s retry delay, outside the expected 30s-40s initial backoff",
+			"Power-off Task scheduled %s retry delay at age %s, outside the expected %s-%s backoff",
 			retryLog.RequeueAfter,
+			elapsed,
+			minimum,
+			maximum,
 		)
+	}
+}
+
+func rufioRetryBackoffRange(taskStartTime, retryTime time.Time) (time.Duration, time.Duration) {
+	minimum := rufioRetryInitialInterval
+	elapsed := retryTime.Sub(taskStartTime)
+	for steps := int(elapsed / rufioRetryStepInterval); steps > 0 && minimum < rufioRetryMaxInterval; steps-- {
+		minimum *= 2
+		if minimum > rufioRetryMaxInterval {
+			minimum = rufioRetryMaxInterval
+		}
+	}
+	maximum := minimum + rufioRetryJitter
+	if maximum > rufioRetryMaxInterval {
+		maximum = rufioRetryMaxInterval
+	}
+	return minimum, maximum
+}
+
+func TestRufioRetryBackoffRange(t *testing.T) {
+	start := time.Date(2026, time.September, 30, 10, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name    string
+		elapsed time.Duration
+		wantMin time.Duration
+		wantMax time.Duration
+	}{
+		{name: "initial", elapsed: 0, wantMin: 30 * time.Second, wantMax: 40 * time.Second},
+		{name: "second tier", elapsed: 2 * time.Minute, wantMin: time.Minute, wantMax: 70 * time.Second},
+		{name: "third tier", elapsed: 4 * time.Minute, wantMin: 2 * time.Minute, wantMax: 130 * time.Second},
+		{name: "maximum", elapsed: 8 * time.Minute, wantMin: 5 * time.Minute, wantMax: 5 * time.Minute},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			minimum, maximum := rufioRetryBackoffRange(start, start.Add(testCase.elapsed))
+			if minimum != testCase.wantMin || maximum != testCase.wantMax {
+				t.Fatalf(
+					"rufioRetryBackoffRange() = %s-%s, want %s-%s",
+					minimum,
+					maximum,
+					testCase.wantMin,
+					testCase.wantMax,
+				)
+			}
+		})
 	}
 }
 
