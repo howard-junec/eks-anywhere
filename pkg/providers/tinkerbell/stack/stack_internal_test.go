@@ -24,7 +24,7 @@ func (d *recordingDocker) Run(_ context.Context, _, _ string, _ []string, flags 
 	return nil
 }
 
-func TestInstallSmeeOnDockerUsesPublicIPv6Override(t *testing.T) {
+func TestInstallSmeeOnDockerUsesRequiredOverrides(t *testing.T) {
 	t.Setenv(tinkerbellPublicIPv6OverrideEnvVar, "::")
 
 	docker := &recordingDocker{}
@@ -58,11 +58,21 @@ func TestInstallSmeeOnDockerUsesPublicIPv6Override(t *testing.T) {
 		t.Fatalf("installing Smee on Docker: %v", err)
 	}
 
+	requiredEnvs := map[string]bool{
+		"TINKERBELL_HTTP_PORT=7171": false,
+		"TINKERBELL_PUBLIC_IPV6=::": false,
+	}
 	for i := 0; i+1 < len(docker.flags); i++ {
-		if docker.flags[i] == "-e" && docker.flags[i+1] == "TINKERBELL_PUBLIC_IPV6=::" {
-			return
+		if docker.flags[i] == "-e" {
+			if _, required := requiredEnvs[docker.flags[i+1]]; required {
+				requiredEnvs[docker.flags[i+1]] = true
+			}
 		}
 	}
 
-	t.Fatalf("Docker flags do not contain the public IPv6 override: %v", docker.flags)
+	for env, found := range requiredEnvs {
+		if !found {
+			t.Fatalf("Docker flags do not contain %q: %v", env, docker.flags)
+		}
+	}
 }

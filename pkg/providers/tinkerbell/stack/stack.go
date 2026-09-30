@@ -264,6 +264,7 @@ func (s *Installer) installSmeeOnDocker(ctx context.Context, bundle releasev1alp
 		// Set the global bind address and the per-service ones so listeners always
 		// bind to the same IP that is advertised.
 		"-e", fmt.Sprintf("TINKERBELL_BIND_ADDRESS=%s", tinkServerIP),
+		"-e", fmt.Sprintf("TINKERBELL_HTTP_PORT=%s", smeeHTTPPort),
 		"-e", fmt.Sprintf("TINKERBELL_TRUSTED_PROXIES=%s", s.podCidrRange),
 		"-e", "TINKERBELL_ENABLE_SMEE=true",
 		"-e", "TINKERBELL_ENABLE_TOOTLES=false",
