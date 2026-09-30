@@ -243,6 +243,7 @@ func TestTinkerbellStackInstallWithDifferentOptions(t *testing.T) {
 					// Listeners must bind to the same IP that is advertised to
 					// netbooting machines (multi-NIC admin machines).
 					"-e", "TINKERBELL_BIND_ADDRESS="+testIP,
+					"-e", "TINKERBELL_HTTP_PORT=7171",
 					"-e", gomock.Any(), // TINKERBELL_TRUSTED_PROXIES
 					// Enable flags
 					"-e", "TINKERBELL_ENABLE_SMEE=true",
