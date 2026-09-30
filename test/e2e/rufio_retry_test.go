@@ -37,7 +37,6 @@ const (
 	expectedTinkerbellRuntimeDigestsEnv = "EXPECTED_TINKERBELL_RUNTIME_DIGESTS"
 	tinkerbellPublicIPv6OverrideTestEnv = "EKSA_TEST_TINKERBELL_PUBLIC_IPV6"
 	localBundleReleaseFile              = "bin/local-bundle-release.yaml"
-	rufioJobResource                    = "jobs.bmc.tinkerbell.org"
 	rufioMachineResource                = "machines.bmc.tinkerbell.org"
 	rufioTaskResource                   = "tasks.bmc.tinkerbell.org"
 	rufioRetryLogMessage                = "power-off attempt failed; requeuing"
@@ -111,9 +110,7 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	connectionObject := toUnstructuredConnection(t, connection)
 	namePrefix := test.ClusterName + "-rufio-retry"
 	powerOnTask := namePrefix + "-on"
-	powerOffJob := namePrefix + "-off"
-	powerOffTask := powerOffJob + "-task-0"
-	faultMachine := namePrefix + "-machine"
+	powerOffTask := namePrefix + "-off"
 	cleanupTask := namePrefix + "-cleanup"
 	faultService := namePrefix + "-fault"
 	sparePoweredOff := false
@@ -141,18 +138,12 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 		t.Fatalf("Spare-worker power-on Task did not complete: %v", err)
 	}
 
-	faultPort := connection.Port
-	if faultPort == 0 {
-		faultPort = 623
-	}
-	if faultPort < 1 || faultPort > 65535 {
-		t.Fatalf("Invalid BMC port %d", faultPort)
-	}
 	if net.ParseIP(connection.Host) == nil {
 		t.Fatalf("Spare worker BMC host %q is not an IP address", connection.Host)
 	}
-	// Keep the Task generation unchanged: the Service starts with no Endpoints,
-	// then DNS begins resolving to the real BMC only after Endpoints are added.
+	servicePorts, endpointPorts := rufioFaultServicePorts(t, connection)
+	// Keep the Task generation unchanged. The ClusterIP initially has no
+	// Endpoints, then forwards to the real BMC after Endpoints are added.
 	service := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
@@ -163,35 +154,36 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 			Namespace: constants.EksaSystemNamespace,
 		},
 		Spec: corev1.ServiceSpec{
-			ClusterIP: corev1.ClusterIPNone,
-			Ports: []corev1.ServicePort{
-				{
-					Name: "bmc",
-					Port: int32(faultPort),
-				},
-			},
+			Ports: servicePorts,
 		},
 	}
 	if err := test.KubectlClient.Apply(ctx, kubeconfig, service); err != nil {
 		t.Fatalf("Failed to create fault-injection Service: %v", err)
 	}
+	createdService := &corev1.Service{}
+	if err := test.KubectlClient.GetObject(
+		ctx,
+		"service",
+		faultService,
+		constants.EksaSystemNamespace,
+		kubeconfig,
+		createdService,
+	); err != nil {
+		t.Fatalf("Failed to read fault-injection Service: %v", err)
+	}
+	if net.ParseIP(createdService.Spec.ClusterIP) == nil {
+		t.Fatalf("Fault-injection Service has invalid ClusterIP %q", createdService.Spec.ClusterIP)
+	}
 
 	faultConnection := connection
-	faultConnection.Host = fmt.Sprintf("%s.%s.svc", faultService, constants.EksaSystemNamespace)
+	faultConnection.Host = createdService.Spec.ClusterIP
 	retryStarted := time.Now()
 	if err := test.KubectlClient.Apply(
 		ctx,
 		kubeconfig,
-		newRufioMachine(faultMachine, toUnstructuredConnection(t, faultConnection)),
+		newRufioTask(powerOffTask, "off", toUnstructuredConnection(t, faultConnection)),
 	); err != nil {
-		t.Fatalf("Failed to create fault-injected BMC Machine: %v", err)
-	}
-	if err := test.KubectlClient.Apply(
-		ctx,
-		kubeconfig,
-		newRufioJob(powerOffJob, faultMachine, "off"),
-	); err != nil {
-		t.Fatalf("Failed to create fault-injected power-off Job: %v", err)
+		t.Fatalf("Failed to create fault-injected power-off Task: %v", err)
 	}
 
 	retryingTask, err := waitForRufioTaskCondition(ctx, test, kubeconfig, powerOffTask, "Retrying")
@@ -269,12 +261,7 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 				Addresses: []corev1.EndpointAddress{
 					{IP: connection.Host},
 				},
-				Ports: []corev1.EndpointPort{
-					{
-						Name: "bmc",
-						Port: int32(faultPort),
-					},
-				},
+				Ports: endpointPorts,
 			},
 		},
 	}
@@ -301,9 +288,6 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if completedTask.GetUID() != taskUID {
 		t.Fatalf("Power-off recovery recreated the Task: got UID %q, want %q", completedTask.GetUID(), taskUID)
 	}
-	if _, err := waitForRufioJobCondition(ctx, test, kubeconfig, powerOffJob, "Completed"); err != nil {
-		t.Fatalf("Power-off Job did not complete after its Task recovered: %v", err)
-	}
 	sparePoweredOff = true
 
 	deleteRufioRetryResources(
@@ -313,8 +297,6 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 		kubeconfig,
 		powerOnTask,
 		powerOffTask,
-		powerOffJob,
-		faultMachine,
 		cleanupTask,
 		faultService,
 	)
@@ -561,6 +543,72 @@ func toUnstructuredConnection(t *testing.T, connection rufiov1alpha1.Connection)
 	return object
 }
 
+func rufioFaultServicePorts(
+	t *testing.T,
+	connection rufiov1alpha1.Connection,
+) ([]corev1.ServicePort, []corev1.EndpointPort) {
+	t.Helper()
+
+	type portKey struct {
+		protocol corev1.Protocol
+		port     int
+	}
+	ports := map[portKey]struct{}{}
+	addPort := func(protocol corev1.Protocol, port int) {
+		if port < 1 || port > 65535 {
+			t.Fatalf("Invalid BMC %s port %d", protocol, port)
+		}
+		ports[portKey{protocol: protocol, port: port}] = struct{}{}
+	}
+
+	addPort(corev1.ProtocolTCP, 443)
+	addPort(corev1.ProtocolUDP, 623)
+	addPort(corev1.ProtocolTCP, 16992)
+	if connection.Port != 0 {
+		addPort(corev1.ProtocolTCP, connection.Port)
+		addPort(corev1.ProtocolUDP, connection.Port)
+	}
+	if options := connection.ProviderOptions; options != nil {
+		if options.Redfish != nil && options.Redfish.Port != 0 {
+			addPort(corev1.ProtocolTCP, options.Redfish.Port)
+		}
+		if options.IPMITOOL != nil && options.IPMITOOL.Port != 0 {
+			addPort(corev1.ProtocolUDP, options.IPMITOOL.Port)
+		}
+		if options.IntelAMT != nil && options.IntelAMT.Port != 0 {
+			addPort(corev1.ProtocolTCP, options.IntelAMT.Port)
+		}
+	}
+
+	keys := make([]portKey, 0, len(ports))
+	for key := range ports {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].port != keys[j].port {
+			return keys[i].port < keys[j].port
+		}
+		return keys[i].protocol < keys[j].protocol
+	})
+
+	servicePorts := make([]corev1.ServicePort, 0, len(keys))
+	endpointPorts := make([]corev1.EndpointPort, 0, len(keys))
+	for _, key := range keys {
+		name := fmt.Sprintf("%s-%d", strings.ToLower(string(key.protocol)), key.port)
+		servicePorts = append(servicePorts, corev1.ServicePort{
+			Name:     name,
+			Protocol: key.protocol,
+			Port:     int32(key.port),
+		})
+		endpointPorts = append(endpointPorts, corev1.EndpointPort{
+			Name:     name,
+			Protocol: key.protocol,
+			Port:     int32(key.port),
+		})
+	}
+	return servicePorts, endpointPorts
+}
+
 func newRufioTask(name, powerAction string, connection map[string]any) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -575,46 +623,6 @@ func newRufioTask(name, powerAction string, connection map[string]any) *unstruct
 					"powerAction": powerAction,
 				},
 				"connection": connection,
-			},
-		},
-	}
-}
-
-func newRufioMachine(name string, connection map[string]any) *unstructured.Unstructured {
-	return &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "bmc.tinkerbell.org/v1alpha1",
-			"kind":       "Machine",
-			"metadata": map[string]any{
-				"name":      name,
-				"namespace": constants.EksaSystemNamespace,
-			},
-			"spec": map[string]any{
-				"connection": connection,
-			},
-		},
-	}
-}
-
-func newRufioJob(name, machineName, powerAction string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "bmc.tinkerbell.org/v1alpha1",
-			"kind":       "Job",
-			"metadata": map[string]any{
-				"name":      name,
-				"namespace": constants.EksaSystemNamespace,
-			},
-			"spec": map[string]any{
-				"machineRef": map[string]any{
-					"name":      machineName,
-					"namespace": constants.EksaSystemNamespace,
-				},
-				"tasks": []any{
-					map[string]any{
-						"powerAction": powerAction,
-					},
-				},
 			},
 		},
 	}
@@ -642,24 +650,31 @@ func waitForRufioTaskConditionWithin(
 	timeout time.Duration,
 ) (*unstructured.Unstructured, error) {
 	var task *unstructured.Unstructured
+	var lastGetErr error
 	err := wait.PollUntilContextTimeout(ctx, 3*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		task = &unstructured.Unstructured{}
+		currentTask := &unstructured.Unstructured{}
 		if err := test.KubectlClient.GetObject(
 			ctx,
 			rufioTaskResource,
 			taskName,
 			constants.EksaSystemNamespace,
 			kubeconfig,
-			task,
+			currentTask,
 		); err != nil {
+			lastGetErr = err
 			return false, nil
 		}
+		task = currentTask
+		lastGetErr = nil
 		if conditionTrue(task, "Failed") && conditionType != "Failed" {
 			return false, fmt.Errorf("Task %s unexpectedly failed: %s", taskName, conditionMessage(task, "Failed"))
 		}
 		return conditionTrue(task, conditionType), nil
 	})
 	if err != nil {
+		if lastGetErr != nil {
+			err = fmt.Errorf("%w; last Task read failed: %v", err, lastGetErr)
+		}
 		return task, err
 	}
 	return task, nil
@@ -679,35 +694,6 @@ func rufioTaskStatusSummary(task *unstructured.Unstructured) string {
 		return fmt.Sprintf("<unavailable: %v>", err)
 	}
 	return string(summary)
-}
-
-func waitForRufioJobCondition(
-	ctx context.Context,
-	test *framework.ClusterE2ETest,
-	kubeconfig, jobName, conditionType string,
-) (*unstructured.Unstructured, error) {
-	var job *unstructured.Unstructured
-	err := wait.PollUntilContextTimeout(ctx, 3*time.Second, 4*time.Minute, true, func(ctx context.Context) (bool, error) {
-		job = &unstructured.Unstructured{}
-		if err := test.KubectlClient.GetObject(
-			ctx,
-			rufioJobResource,
-			jobName,
-			constants.EksaSystemNamespace,
-			kubeconfig,
-			job,
-		); err != nil {
-			return false, nil
-		}
-		if conditionTrue(job, "Failed") && conditionType != "Failed" {
-			return false, fmt.Errorf("Job %s unexpectedly failed: %s", jobName, conditionMessage(job, "Failed"))
-		}
-		return conditionTrue(job, conditionType), nil
-	})
-	if err != nil {
-		return job, err
-	}
-	return job, nil
 }
 
 func conditionTrue(task *unstructured.Unstructured, conditionType string) bool {
@@ -820,6 +806,50 @@ func parseRufioRetryDuration(raw json.RawMessage) (time.Duration, error) {
 		return 0, fmt.Errorf("expected duration string or numeric nanoseconds: %s", raw)
 	}
 	return time.Duration(nanoseconds), nil
+}
+
+func TestRufioFaultServicePorts(t *testing.T) {
+	connection := rufiov1alpha1.Connection{
+		Port: 8443,
+		ProviderOptions: &rufiov1alpha1.ProviderOptions{
+			Redfish: &rufiov1alpha1.RedfishOptions{Port: 9443},
+			IPMITOOL: &rufiov1alpha1.IPMITOOLOptions{
+				Port: 7623,
+			},
+			IntelAMT: &rufiov1alpha1.IntelAMTOptions{Port: 16993},
+		},
+	}
+	servicePorts, endpointPorts := rufioFaultServicePorts(t, connection)
+	if len(servicePorts) != len(endpointPorts) {
+		t.Fatalf("Service ports = %d, endpoint ports = %d", len(servicePorts), len(endpointPorts))
+	}
+
+	got := make(map[string]struct{}, len(servicePorts))
+	for i := range servicePorts {
+		servicePort := servicePorts[i]
+		endpointPort := endpointPorts[i]
+		if servicePort.Name != endpointPort.Name ||
+			servicePort.Protocol != endpointPort.Protocol ||
+			servicePort.Port != endpointPort.Port {
+			t.Fatalf("Service port %#v does not match endpoint port %#v", servicePort, endpointPort)
+		}
+		got[fmt.Sprintf("%s/%d", servicePort.Protocol, servicePort.Port)] = struct{}{}
+	}
+
+	for _, expected := range []string{
+		"TCP/443",
+		"UDP/623",
+		"TCP/8443",
+		"UDP/8443",
+		"TCP/9443",
+		"UDP/7623",
+		"TCP/16992",
+		"TCP/16993",
+	} {
+		if _, ok := got[expected]; !ok {
+			t.Errorf("Missing fault Service port %s; got %v", expected, mapKeys(got))
+		}
+	}
 }
 
 func TestParseRufioRetryDuration(t *testing.T) {
@@ -968,7 +998,7 @@ func deleteRufioRetryResources(
 	ctx context.Context,
 	test *framework.ClusterE2ETest,
 	kubeconfig string,
-	powerOnTask, powerOffTask, powerOffJob, faultMachine, cleanupTask, faultService string,
+	powerOnTask, powerOffTask, cleanupTask, faultService string,
 ) {
 	t.Helper()
 	for _, resource := range []struct {
@@ -976,9 +1006,7 @@ func deleteRufioRetryResources(
 		name string
 	}{
 		{rufioTaskResource, powerOnTask},
-		{rufioJobResource, powerOffJob},
 		{rufioTaskResource, powerOffTask},
-		{rufioMachineResource, faultMachine},
 		{rufioTaskResource, cleanupTask},
 		{"endpoints", faultService},
 		{"service", faultService},
