@@ -45,6 +45,8 @@ const (
 	rufioRetryMaxInterval               = 5 * time.Minute
 	rufioRetryStepInterval              = 2 * time.Minute
 	rufioRetryJitter                    = 10 * time.Second
+	rufioTaskConditionTimeout           = 4 * time.Minute
+	rufioRecoveryTimeout                = rufioRetryMaxInterval + 3*time.Minute
 )
 
 func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing.T) {
@@ -91,7 +93,7 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 		}
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
 	defer cancel()
 	kubeconfig := test.BootstrapKubeconfigFilePath()
 	if err := waitForBootstrapTinkerbell(ctx, test, kubeconfig, createCommand); err != nil {
@@ -216,6 +218,11 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	}
 	assertRufioRetryBackoff(t, taskStartTime, retryLogs[0])
 	assertRufioRetryBackoff(t, taskStartTime, retryLogs[1])
+	t.Logf(
+		"Observed retry delays %s and %s before restarting the Tinkerbell controller",
+		retryLogs[0].RequeueAfter,
+		retryLogs[1].RequeueAfter,
+	)
 	if retryInterval := retryLogs[1].Time.Sub(retryLogs[0].Time); retryInterval+2*time.Second < retryLogs[0].RequeueAfter {
 		t.Fatalf(
 			"Power-off Task retried after %s, earlier than its scheduled %s backoff",
@@ -246,6 +253,7 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 		t.Fatalf("Restarted controller did not resume the retrying Task: %v", err)
 	}
 	assertRufioRetryBackoff(t, taskStartTime, resumedRetryLogs[0])
+	t.Logf("Controller restart resumed the Task with a %s retry delay", resumedRetryLogs[0].RequeueAfter)
 
 	endpoints := &corev1.Endpoints{
 		TypeMeta: metav1.TypeMeta{
@@ -273,10 +281,22 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if err := test.KubectlClient.Apply(ctx, kubeconfig, endpoints); err != nil {
 		t.Fatalf("Failed to restore fault Service connectivity to the BMC: %v", err)
 	}
+	t.Logf("Restored BMC connectivity; waiting up to %s for the scheduled retry", rufioRecoveryTimeout)
 
-	completedTask, err := waitForRufioTaskCondition(ctx, test, kubeconfig, powerOffTask, "Completed")
+	completedTask, err := waitForRufioTaskConditionWithin(
+		ctx,
+		test,
+		kubeconfig,
+		powerOffTask,
+		"Completed",
+		rufioRecoveryTimeout,
+	)
 	if err != nil {
-		t.Fatalf("Recovered power-off Task did not complete: %v", err)
+		t.Fatalf(
+			"Recovered power-off Task did not complete: %v; last Task state: %s",
+			err,
+			rufioTaskStatusSummary(completedTask),
+		)
 	}
 	if completedTask.GetUID() != taskUID {
 		t.Fatalf("Power-off recovery recreated the Task: got UID %q, want %q", completedTask.GetUID(), taskUID)
@@ -605,8 +625,24 @@ func waitForRufioTaskCondition(
 	test *framework.ClusterE2ETest,
 	kubeconfig, taskName, conditionType string,
 ) (*unstructured.Unstructured, error) {
+	return waitForRufioTaskConditionWithin(
+		ctx,
+		test,
+		kubeconfig,
+		taskName,
+		conditionType,
+		rufioTaskConditionTimeout,
+	)
+}
+
+func waitForRufioTaskConditionWithin(
+	ctx context.Context,
+	test *framework.ClusterE2ETest,
+	kubeconfig, taskName, conditionType string,
+	timeout time.Duration,
+) (*unstructured.Unstructured, error) {
 	var task *unstructured.Unstructured
-	err := wait.PollUntilContextTimeout(ctx, 3*time.Second, 4*time.Minute, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, 3*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
 		task = &unstructured.Unstructured{}
 		if err := test.KubectlClient.GetObject(
 			ctx,
@@ -627,6 +663,22 @@ func waitForRufioTaskCondition(
 		return task, err
 	}
 	return task, nil
+}
+
+func rufioTaskStatusSummary(task *unstructured.Unstructured) string {
+	if task == nil {
+		return "<nil>"
+	}
+	status, _, _ := unstructured.NestedMap(task.Object, "status")
+	summary, err := json.Marshal(map[string]any{
+		"uid":         task.GetUID(),
+		"annotations": task.GetAnnotations(),
+		"status":      status,
+	})
+	if err != nil {
+		return fmt.Sprintf("<unavailable: %v>", err)
+	}
+	return string(summary)
 }
 
 func waitForRufioJobCondition(
