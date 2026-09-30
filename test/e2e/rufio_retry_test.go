@@ -180,16 +180,31 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if taskUID == "" {
 		t.Fatal("Fault-injected power-off Task has no UID")
 	}
-	retryTimes, err := waitForRufioRetryLogTimes(ctx, test, kubeconfig, powerOffTask, retryStarted, 2)
+	tinkerbellPod, err := test.KubectlClient.GetPodNameByLabel(
+		ctx,
+		constants.EksaSystemNamespace,
+		"app=tinkerbell",
+		kubeconfig,
+	)
+	if err != nil {
+		t.Fatalf("Failed to find Tinkerbell pod while checking retries: %v", err)
+	}
+	retryLogs, err := waitForRufioRetryLogs(ctx, test, kubeconfig, tinkerbellPod, powerOffTask, retryStarted, 2)
 	if err != nil {
 		t.Fatalf("Power-off Task did not emit two retry logs: %v", err)
 	}
-	if retryInterval := retryTimes[1].Sub(retryTimes[0]); retryInterval < 28*time.Second || retryInterval > 45*time.Second {
-		t.Fatalf("Power-off Task retry interval %s is outside the expected 30s-40s backoff", retryInterval)
+	assertInitialRufioRetryBackoff(t, retryLogs[0])
+	assertInitialRufioRetryBackoff(t, retryLogs[1])
+	if retryInterval := retryLogs[1].Time.Sub(retryLogs[0].Time); retryInterval+2*time.Second < retryLogs[0].RequeueAfter {
+		t.Fatalf(
+			"Power-off Task retried after %s, earlier than its scheduled %s backoff",
+			retryInterval,
+			retryLogs[0].RequeueAfter,
+		)
 	}
 
-	restartTinkerbellController(t, ctx, test, kubeconfig)
-	restartReadyAt := time.Now()
+	restartStartedAt := time.Now()
+	restartedPod := restartTinkerbellController(t, ctx, test, kubeconfig)
 	restartedTask, err := waitForRufioTaskCondition(ctx, test, kubeconfig, powerOffTask, "Retrying")
 	if err != nil {
 		t.Fatalf("Power-off Task did not remain retryable after controller restart: %v", err)
@@ -197,13 +212,19 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	if restartedTask.GetUID() != taskUID {
 		t.Fatalf("Controller restart recreated the Task: got UID %q, want %q", restartedTask.GetUID(), taskUID)
 	}
-	resumedRetryTimes, err := waitForRufioRetryLogTimes(ctx, test, kubeconfig, powerOffTask, restartReadyAt, 1)
+	resumedRetryLogs, err := waitForRufioRetryLogs(
+		ctx,
+		test,
+		kubeconfig,
+		restartedPod,
+		powerOffTask,
+		restartStartedAt,
+		1,
+	)
 	if err != nil {
 		t.Fatalf("Restarted controller did not resume the retrying Task: %v", err)
 	}
-	if resumeDelay := resumedRetryTimes[0].Sub(restartReadyAt); resumeDelay > 45*time.Second {
-		t.Fatalf("Restarted controller took %s to resume the retrying Task", resumeDelay)
-	}
+	assertInitialRufioRetryBackoff(t, resumedRetryLogs[0])
 
 	endpoints := &corev1.Endpoints{
 		TypeMeta: metav1.TypeMeta{
@@ -564,46 +585,55 @@ func conditionMessage(task *unstructured.Unstructured, conditionType string) str
 	return ""
 }
 
-func waitForRufioRetryLogTimes(
+type rufioRetryLog struct {
+	Time         time.Time
+	RequeueAfter time.Duration
+}
+
+func waitForRufioRetryLogs(
 	ctx context.Context,
 	test *framework.ClusterE2ETest,
-	kubeconfig, taskName string,
+	kubeconfig, podName, taskName string,
 	since time.Time,
 	want int,
-) ([]time.Time, error) {
-	var retryTimes []time.Time
+) ([]rufioRetryLog, error) {
+	var retryLogs []rufioRetryLog
 	err := wait.PollUntilContextTimeout(ctx, 5*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
 		var err error
-		retryTimes, err = rufioRetryLogTimes(ctx, test, kubeconfig, taskName, since)
+		retryLogs, err = rufioRetryLogs(ctx, test, kubeconfig, podName, taskName, since)
 		if err != nil {
 			return false, nil
 		}
-		return len(retryTimes) >= want, nil
+		return len(retryLogs) >= want, nil
 	})
-	return retryTimes, err
+	return retryLogs, err
 }
 
-func rufioRetryLogTimes(
+func rufioRetryLogs(
 	ctx context.Context,
 	test *framework.ClusterE2ETest,
-	kubeconfig, taskName string,
+	kubeconfig, podName, taskName string,
 	since time.Time,
-) ([]time.Time, error) {
-	pod, err := test.KubectlClient.GetPodNameByLabel(ctx, constants.EksaSystemNamespace, "app=tinkerbell", kubeconfig)
+) ([]rufioRetryLog, error) {
+	logs, err := test.KubectlClient.GetPodLogsSince(
+		ctx,
+		constants.EksaSystemNamespace,
+		podName,
+		"tinkerbell",
+		kubeconfig,
+		since,
+	)
 	if err != nil {
 		return nil, err
 	}
-	logs, err := test.KubectlClient.GetPodLogsSince(ctx, constants.EksaSystemNamespace, pod, "tinkerbell", kubeconfig, since)
-	if err != nil {
-		return nil, err
-	}
-	retryTimes := make([]time.Time, 0)
+	retryLogs := make([]rufioRetryLog, 0)
 	for _, line := range strings.Split(logs, "\n") {
 		if !strings.Contains(line, taskName) || !strings.Contains(line, rufioRetryLogMessage) {
 			continue
 		}
 		var entry struct {
-			Time string `json:"time"`
+			Time         string          `json:"time"`
+			RequeueAfter json.RawMessage `json:"requeueAfter"`
 		}
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			return nil, fmt.Errorf("parsing Rufio retry log: %w", err)
@@ -612,12 +642,63 @@ func rufioRetryLogTimes(
 		if err != nil {
 			return nil, fmt.Errorf("parsing Rufio retry log time %q: %w", entry.Time, err)
 		}
-		retryTimes = append(retryTimes, logTime)
+		requeueAfter, err := parseRufioRetryDuration(entry.RequeueAfter)
+		if err != nil {
+			return nil, fmt.Errorf("parsing Rufio retry log requeueAfter: %w", err)
+		}
+		retryLogs = append(retryLogs, rufioRetryLog{
+			Time:         logTime,
+			RequeueAfter: requeueAfter,
+		})
 	}
-	sort.Slice(retryTimes, func(i, j int) bool {
-		return retryTimes[i].Before(retryTimes[j])
+	sort.Slice(retryLogs, func(i, j int) bool {
+		return retryLogs[i].Time.Before(retryLogs[j].Time)
 	})
-	return retryTimes, nil
+	return retryLogs, nil
+}
+
+func parseRufioRetryDuration(raw json.RawMessage) (time.Duration, error) {
+	var duration string
+	if err := json.Unmarshal(raw, &duration); err == nil {
+		return time.ParseDuration(duration)
+	}
+
+	var seconds float64
+	if err := json.Unmarshal(raw, &seconds); err != nil {
+		return 0, fmt.Errorf("expected duration string or numeric seconds: %s", raw)
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
+}
+
+func TestParseRufioRetryDuration(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "string", raw: `"30s"`, want: 30 * time.Second},
+		{name: "numeric seconds", raw: `30.5`, want: 30*time.Second + 500*time.Millisecond},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := parseRufioRetryDuration(json.RawMessage(testCase.raw))
+			if err != nil {
+				t.Fatalf("parseRufioRetryDuration() error = %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("parseRufioRetryDuration() = %s, want %s", got, testCase.want)
+			}
+		})
+	}
+}
+
+func assertInitialRufioRetryBackoff(t *testing.T, retryLog rufioRetryLog) {
+	t.Helper()
+	if retryLog.RequeueAfter < 30*time.Second || retryLog.RequeueAfter > 40*time.Second {
+		t.Fatalf(
+			"Power-off Task scheduled %s retry delay, outside the expected 30s-40s initial backoff",
+			retryLog.RequeueAfter,
+		)
+	}
 }
 
 func restartTinkerbellController(
@@ -625,7 +706,7 @@ func restartTinkerbellController(
 	ctx context.Context,
 	test *framework.ClusterE2ETest,
 	kubeconfig string,
-) {
+) string {
 	t.Helper()
 	oldPod, err := test.KubectlClient.GetPodNameByLabel(ctx, constants.EksaSystemNamespace, "app=tinkerbell", kubeconfig)
 	if err != nil {
@@ -659,6 +740,7 @@ func restartTinkerbellController(
 	if newPod == oldPod {
 		t.Fatalf("Tinkerbell controller pod %q was not replaced", oldPod)
 	}
+	return newPod
 }
 
 func deleteRufioRetryResources(

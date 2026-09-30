@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -44,6 +46,52 @@ func TestFindControlPlaneHardwareNotFound(t *testing.T) {
 
 	g.Expect(ok).To(BeFalse())
 	g.Expect(got).To(BeNil())
+}
+
+func TestControlPlaneHardwareFromCSV(t *testing.T) {
+	g := NewWithT(t)
+	inventoryPath := filepath.Join(t.TempDir(), "hardware.csv")
+	controlPlane := &api.Hardware{
+		IPAddress: "192.0.2.10",
+		Labels: map[string]string{
+			api.HardwareLabelTypeKeyName: api.ControlPlane,
+		},
+	}
+	worker := &api.Hardware{
+		IPAddress: "192.0.2.11",
+		Labels: map[string]string{
+			api.HardwareLabelTypeKeyName: api.Worker,
+		},
+	}
+
+	g.Expect(api.WriteHardwareSliceToCSV([]*api.Hardware{worker, controlPlane}, inventoryPath)).To(Succeed())
+	data, err := os.ReadFile(inventoryPath)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	got, err := controlPlaneHardwareFromCSV(data)
+
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(got.IPAddress).To(Equal(controlPlane.IPAddress))
+	g.Expect(got.Labels.Get(api.HardwareLabelTypeKeyName)).To(Equal(api.ControlPlane))
+}
+
+func TestControlPlaneHardwareFromCSVRequiresControlPlane(t *testing.T) {
+	g := NewWithT(t)
+	inventoryPath := filepath.Join(t.TempDir(), "hardware.csv")
+	worker := &api.Hardware{
+		IPAddress: "192.0.2.11",
+		Labels: map[string]string{
+			api.HardwareLabelTypeKeyName: api.Worker,
+		},
+	}
+
+	g.Expect(api.WriteHardwareSliceToCSV([]*api.Hardware{worker}, inventoryPath)).To(Succeed())
+	data, err := os.ReadFile(inventoryPath)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	_, err = controlPlaneHardwareFromCSV(data)
+
+	g.Expect(err).To(MatchError(ContainSubstring("no control-plane hardware")))
 }
 
 func TestRufioRetryNodeDiagnosticsCommand(t *testing.T) {

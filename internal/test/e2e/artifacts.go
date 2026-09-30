@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -129,9 +130,9 @@ func (e *E2ESession) collectRufioRetryNodeDiagnostics(testName string) {
 		return
 	}
 
-	controlPlane, ok := findControlPlaneHardware(e.hardware)
-	if !ok {
-		e.logger.Info("WARN: Cannot collect Rufio retry node diagnostics: no control-plane hardware found")
+	controlPlane, err := e.rufioRetryControlPlaneHardware(testName)
+	if err != nil {
+		e.logger.Error(err, "Cannot collect Rufio retry node diagnostics")
 		return
 	}
 
@@ -152,6 +153,48 @@ func (e *E2ESession) collectRufioRetryNodeDiagnostics(testName string) {
 		return
 	}
 	e.logger.Info("Collected Tinkerbell control-plane node diagnostics")
+}
+
+func (e *E2ESession) rufioRetryControlPlaneHardware(testName string) (*api.Hardware, error) {
+	if controlPlane, ok := findControlPlaneHardware(e.hardware); ok {
+		return controlPlane, nil
+	}
+
+	inventoryPath := filepath.Join(
+		e2eHomeFolder,
+		e.clusterName(e.branchName, e.instanceId, testName),
+		"hardware.csv",
+	)
+	output, err := ssm.RunCommand(
+		e.session,
+		logr.Discard(),
+		e.instanceId,
+		"cat "+shellQuote(inventoryPath),
+		ssmTimeout,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("reading generated hardware inventory: %w", err)
+	}
+	if !output.Successful() {
+		return nil, fmt.Errorf(
+			"reading generated hardware inventory returned status %s",
+			output.StatusDetails(),
+		)
+	}
+
+	return controlPlaneHardwareFromCSV(output.StdOut)
+}
+
+func controlPlaneHardwareFromCSV(data []byte) (*api.Hardware, error) {
+	hardware, err := api.NewHardwareSlice(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("parsing generated hardware inventory: %w", err)
+	}
+	controlPlane, ok := findControlPlaneHardware(hardware)
+	if !ok {
+		return nil, fmt.Errorf("generated hardware inventory has no control-plane hardware")
+	}
+	return controlPlane, nil
 }
 
 func findControlPlaneHardware(hardware []*api.Hardware) (*api.Hardware, bool) {
