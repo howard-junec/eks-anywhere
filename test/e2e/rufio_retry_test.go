@@ -763,11 +763,11 @@ func parseRufioRetryDuration(raw json.RawMessage) (time.Duration, error) {
 		return time.ParseDuration(duration)
 	}
 
-	var seconds float64
-	if err := json.Unmarshal(raw, &seconds); err != nil {
-		return 0, fmt.Errorf("expected duration string or numeric seconds: %s", raw)
+	var nanoseconds int64
+	if err := json.Unmarshal(raw, &nanoseconds); err != nil {
+		return 0, fmt.Errorf("expected duration string or numeric nanoseconds: %s", raw)
 	}
-	return time.Duration(seconds * float64(time.Second)), nil
+	return time.Duration(nanoseconds), nil
 }
 
 func TestParseRufioRetryDuration(t *testing.T) {
@@ -777,7 +777,7 @@ func TestParseRufioRetryDuration(t *testing.T) {
 		want time.Duration
 	}{
 		{name: "string", raw: `"30s"`, want: 30 * time.Second},
-		{name: "numeric seconds", raw: `30.5`, want: 30*time.Second + 500*time.Millisecond},
+		{name: "numeric nanoseconds", raw: `30500000000`, want: 30*time.Second + 500*time.Millisecond},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			got, err := parseRufioRetryDuration(json.RawMessage(testCase.raw))
