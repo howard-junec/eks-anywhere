@@ -25,7 +25,7 @@ func TestRufioRetryNodeDiagnosticsFromInventoryCommand(t *testing.T) {
 	g.Expect(command).NotTo(ContainSubstring("cat "))
 	g.Expect(command).NotTo(ContainSubstring("bmc_password"))
 
-	syntaxCheck := exec.Command("bash", "-n")
+	syntaxCheck := exec.Command("sh", "-n")
 	syntaxCheck.Stdin = strings.NewReader(command)
 	output, err := syntaxCheck.CombinedOutput()
 	g.Expect(err).NotTo(HaveOccurred())
@@ -41,7 +41,7 @@ control-plane,192.0.2.10,,,,,,type=control-plane,,cp-user,"cp,secret",
 `
 	g.Expect(os.WriteFile(inventoryPath, []byte(inventory), 0o600)).To(Succeed())
 
-	output, err := exec.Command("bash", "-c", rufioRetryControlPlaneHostCommand(inventoryPath)).CombinedOutput()
+	output, err := exec.Command("sh", "-c", rufioRetryControlPlaneHostCommand(inventoryPath)).CombinedOutput()
 
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(strings.TrimSpace(string(output))).To(Equal("192.0.2.10"))

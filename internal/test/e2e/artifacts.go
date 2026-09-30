@@ -184,7 +184,7 @@ func rufioRetryNodeDiagnosticsFromInventoryCommand(inventoryPath, outputDir stri
 
 func rufioRetryControlPlaneHostCommand(inventoryPath string) string {
 	return fmt.Sprintf(
-		"python3 - %s <<'RUFIO_HARDWARE_INVENTORY'\n%s\nRUFIO_HARDWARE_INVENTORY",
+		"python3 - %s <<'RUFIO_HARDWARE_INVENTORY'\n%s\nRUFIO_HARDWARE_INVENTORY\n",
 		shellQuote(inventoryPath),
 		rufioRetryControlPlaneHostScript,
 	)

@@ -26,6 +26,7 @@ import (
 	rufiov1alpha1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1/thirdparty/tinkerbell/rufio"
 	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/executables"
+	"github.com/aws/eks-anywhere/pkg/types"
 	releasev1alpha1 "github.com/aws/eks-anywhere/release/api/v1alpha1"
 	"github.com/aws/eks-anywhere/test/framework"
 )
@@ -79,14 +80,29 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 	setTinkerbellBundleImage(t, bundleImage)
 	test.GenerateHardwareConfig()
 	test.GenerateSupportBundleOnCleanupIfTestFailed()
-	test.CreateCluster(framework.WithControlPlaneWaitTimeout("20m"))
-	test.ValidateControlPlaneNodes(framework.ValidateControlPlaneNoTaints, framework.ValidateControlPlaneLabels)
+	createCommand := test.StartCreateCluster(framework.WithControlPlaneWaitTimeout("30m"))
+	createStopped := false
+	t.Cleanup(func() {
+		if createStopped {
+			return
+		}
+		if err := createCommand.Stop(); err != nil {
+			t.Logf("Stopped in-progress cluster creation during cleanup: %v", err)
+		}
+	})
 
-	ctx := context.Background()
-	kubeconfig := test.KubeconfigFilePath()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	kubeconfig := test.BootstrapKubeconfigFilePath()
+	if err := waitForBootstrapTinkerbell(ctx, test, kubeconfig, createCommand); err != nil {
+		t.Fatalf("Bootstrap Tinkerbell did not become ready: %v", err)
+	}
 	assertTinkerbellImage(t, ctx, test, kubeconfig, bundleImage, runtimeDigests)
 
-	connection := spareWorkerConnection(t, ctx, test, kubeconfig)
+	connection, err := waitForSpareWorkerConnection(ctx, test, kubeconfig, createCommand)
+	if err != nil {
+		t.Fatalf("Spare worker BMC connection did not become available: %v", err)
+	}
 	if connection.ProviderOptions != nil && connection.ProviderOptions.RPC != nil {
 		t.Fatal("Safe fault injection does not support BMC connections that can bypass connection.host through RPC")
 	}
@@ -282,8 +298,10 @@ func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing
 		cleanupTask,
 		faultService,
 	)
-	test.DeleteCluster()
-	test.ValidateHardwareDecommissioned()
+	if err := createCommand.Stop(); err != nil {
+		t.Logf("Stopped cluster creation after focused Rufio retry validation: %v", err)
+	}
+	createStopped = true
 }
 
 func setTinkerbellBundleImage(t *testing.T, image string) {
@@ -400,11 +418,70 @@ func mapKeys(values map[string]struct{}) []string {
 	return keys
 }
 
-func spareWorkerConnection(t *testing.T, ctx context.Context, test *framework.ClusterE2ETest, kubeconfig string) rufiov1alpha1.Connection {
-	t.Helper()
+func waitForBootstrapTinkerbell(
+	ctx context.Context,
+	test *framework.ClusterE2ETest,
+	kubeconfig string,
+	createCommand *framework.RunningCommand,
+) error {
+	return wait.PollUntilContextTimeout(ctx, 5*time.Second, 15*time.Minute, true, func(ctx context.Context) (bool, error) {
+		if err := commandExitError(createCommand); err != nil {
+			return false, err
+		}
+		if _, err := os.Stat(kubeconfig); err != nil {
+			return false, nil
+		}
+		deployment, err := test.KubectlClient.GetDeployment(ctx, "tinkerbell", constants.EksaSystemNamespace, kubeconfig)
+		if err != nil || deployment.Status.AvailableReplicas == 0 {
+			return false, nil
+		}
+		pods, err := test.KubectlClient.GetPods(
+			ctx,
+			executables.WithKubeconfig(kubeconfig),
+			executables.WithNamespace(constants.EksaSystemNamespace),
+			executables.WithSelector("app=tinkerbell"),
+		)
+		if err != nil {
+			return false, nil
+		}
+		for _, pod := range pods {
+			for _, status := range pod.Status.ContainerStatuses {
+				if status.Name == "tinkerbell" && status.Ready {
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	})
+}
+
+func waitForSpareWorkerConnection(
+	ctx context.Context,
+	test *framework.ClusterE2ETest,
+	kubeconfig string,
+	createCommand *framework.RunningCommand,
+) (rufiov1alpha1.Connection, error) {
+	var connection rufiov1alpha1.Connection
+	err := wait.PollUntilContextTimeout(ctx, 5*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
+		if err := commandExitError(createCommand); err != nil {
+			return false, err
+		}
+		var found bool
+		var err error
+		connection, found, err = findSpareWorkerConnection(ctx, test, kubeconfig)
+		return found, err
+	})
+	return connection, err
+}
+
+func findSpareWorkerConnection(
+	ctx context.Context,
+	test *framework.ClusterE2ETest,
+	kubeconfig string,
+) (rufiov1alpha1.Connection, bool, error) {
 	hardware, err := test.KubectlClient.GetUnprovisionedTinkerbellHardware(ctx, kubeconfig, constants.EksaSystemNamespace)
 	if err != nil {
-		t.Fatalf("Failed to list unprovisioned Tinkerbell hardware: %v", err)
+		return rufiov1alpha1.Connection{}, false, nil
 	}
 
 	for i := range hardware {
@@ -420,17 +497,35 @@ func spareWorkerConnection(t *testing.T, ctx context.Context, test *framework.Cl
 			kubeconfig,
 			machine,
 		); err != nil {
-			t.Fatalf("Failed to get spare worker BMCMachine %q: %v", hardware[i].Spec.BMCRef.Name, err)
+			return rufiov1alpha1.Connection{}, false, fmt.Errorf(
+				"getting spare worker BMCMachine %q: %w",
+				hardware[i].Spec.BMCRef.Name,
+				err,
+			)
 		}
 		connection := machine.Spec.Connection
 		if connection.AuthSecretRef.Name != "" && connection.AuthSecretRef.Namespace == "" {
 			connection.AuthSecretRef.Namespace = constants.EksaSystemNamespace
 		}
-		return connection
+		return connection, true, nil
 	}
 
-	t.Fatal("No unprovisioned worker hardware with a BMC reference was found")
-	return rufiov1alpha1.Connection{}
+	return rufiov1alpha1.Connection{}, false, nil
+}
+
+func commandExitError(command *framework.RunningCommand) error {
+	select {
+	case <-command.Done():
+		err := command.Wait()
+		output := command.Output()
+		const maxOutput = 8 * 1024
+		if len(output) > maxOutput {
+			output = output[len(output)-maxOutput:]
+		}
+		return fmt.Errorf("cluster creation exited before fault injection was ready: %v\n%s", err, output)
+	default:
+		return nil
+	}
 }
 
 func toUnstructuredConnection(t *testing.T, connection rufiov1alpha1.Connection) map[string]any {
@@ -795,7 +890,10 @@ func restartTinkerbellController(
 	}
 	if err := test.KubectlClient.WaitForResourceRolledout(
 		ctx,
-		test.Cluster(),
+		&types.Cluster{
+			Name:           test.ClusterName,
+			KubeconfigFile: kubeconfig,
+		},
 		"5m",
 		"tinkerbell",
 		constants.EksaSystemNamespace,

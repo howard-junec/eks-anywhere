@@ -791,6 +791,17 @@ func (e *ClusterE2ETest) createCluster(opts ...CommandOpt) {
 		}
 	}
 
+	createClusterArgs := e.createClusterArgs()
+	e.RunEKSA(createClusterArgs, opts...)
+}
+
+// StartCreateCluster starts cluster creation without waiting for it to finish.
+func (e *ClusterE2ETest) StartCreateCluster(opts ...CommandOpt) *RunningCommand {
+	createClusterArgs := e.createClusterArgs()
+	return e.RunEKSAAsync(createClusterArgs, opts...)
+}
+
+func (e *ClusterE2ETest) createClusterArgs() []string {
 	e.T.Logf("Creating cluster %s", e.ClusterName)
 	createClusterArgs := []string{"create", "cluster", "-f", e.ClusterConfigLocation, "-v", "6"}
 
@@ -810,7 +821,7 @@ func (e *ClusterE2ETest) createCluster(opts ...CommandOpt) {
 		}
 	}
 
-	e.RunEKSA(createClusterArgs, opts...)
+	return createClusterArgs
 }
 
 func (e *ClusterE2ETest) ValidateCluster(kubeVersion v1alpha1.KubernetesVersion) {
@@ -1085,6 +1096,31 @@ func (e *ClusterE2ETest) RunEKSA(args []string, opts ...CommandOpt) {
 	e.Run(binaryPath, args...)
 }
 
+// RunEKSAAsync starts an EKS-A command without waiting for it to finish.
+func (e *ClusterE2ETest) RunEKSAAsync(args []string, opts ...CommandOpt) *RunningCommand {
+	binaryPath := e.eksaBinaryLocation
+	for _, o := range opts {
+		err := o(&binaryPath, &args)
+		if err != nil {
+			e.T.Fatalf("Error executing EKS-A at path %s with args %s: %v", binaryPath, args, err)
+		}
+	}
+	if binaryPath == defaultEksaBinaryLocation {
+		var err error
+		binaryPath, err = DefaultLocalEKSABinaryPath()
+		if err != nil {
+			e.T.Fatalf("Error finding local EKS-A binary: %v", err)
+		}
+	}
+
+	e.T.Log("Running asynchronous shell command", "[", binaryPath, args, "]")
+	command, err := startCommand(binaryPath, args...)
+	if err != nil {
+		e.T.Fatalf("Error starting command %s %v: %v", binaryPath, args, err)
+	}
+	return command
+}
+
 func (e *ClusterE2ETest) StopIfFailed() {
 	if e.T.Failed() {
 		e.T.FailNow()
@@ -1109,6 +1145,11 @@ func (e *ClusterE2ETest) managementCluster() *types.Cluster {
 // KubeconfigFilePath retrieves the Kubeconfig path used for the workload cluster.
 func (e *ClusterE2ETest) KubeconfigFilePath() string {
 	return filepath.Join(e.ClusterConfigFolder, fmt.Sprintf("%s-eks-a-cluster.kubeconfig", e.ClusterName))
+}
+
+// BootstrapKubeconfigFilePath retrieves the kubeconfig used by the temporary kind cluster.
+func (e *ClusterE2ETest) BootstrapKubeconfigFilePath() string {
+	return filepath.Join(e.ClusterConfigFolder, "generated", fmt.Sprintf("%s.kind.kubeconfig", e.ClusterName))
 }
 
 // BuildWorkloadClusterClient creates a client for the workload cluster created by e.

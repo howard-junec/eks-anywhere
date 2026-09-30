@@ -1,17 +1,67 @@
 package framework
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	releasev1alpha1 "github.com/aws/eks-anywhere/release/api/v1alpha1"
 )
 
 type CommandOpt func(*string, *[]string) (err error)
+
+type synchronizedBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
+}
+
+// RunningCommand is an asynchronously executing command.
+type RunningCommand struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+	output *synchronizedBuffer
+	err    error
+}
+
+// Done is closed after the command exits.
+func (c *RunningCommand) Done() <-chan struct{} {
+	return c.done
+}
+
+// Output returns the combined stdout and stderr produced so far.
+func (c *RunningCommand) Output() string {
+	return c.output.String()
+}
+
+// Wait blocks until the command exits.
+func (c *RunningCommand) Wait() error {
+	<-c.done
+	return c.err
+}
+
+// Stop cancels the command and waits for it to exit.
+func (c *RunningCommand) Stop() error {
+	c.cancel()
+	return c.Wait()
+}
 
 func appendOpt(new ...string) CommandOpt {
 	return func(binaryPath *string, args *[]string) (err error) {
@@ -136,10 +186,48 @@ func DefaultLocalEKSABinDir() (string, error) {
 }
 
 func prepareCommand(name string, args ...string) (*exec.Cmd, error) {
+	return prepareCommandContext(context.Background(), false, name, args...)
+}
+
+func startCommand(name string, args ...string) (*RunningCommand, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd, err := prepareCommandContext(ctx, true, name, args...)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	output := &synchronizedBuffer{}
+	cmd.Stderr = io.MultiWriter(os.Stderr, output)
+	cmd.Stdout = io.MultiWriter(os.Stdout, output)
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, err
+	}
+
+	running := &RunningCommand{
+		cancel: cancel,
+		done:   make(chan struct{}),
+		output: output,
+	}
+	go func() {
+		running.err = cmd.Wait()
+		close(running.done)
+	}()
+	return running, nil
+}
+
+func prepareCommandContext(ctx context.Context, replaceShell bool, name string, args ...string) (*exec.Cmd, error) {
 	command := strings.Join(append([]string{name}, args...), " ")
+	if replaceShell {
+		command = "exec " + command
+	}
 	shArgs := []string{"-c", command}
 
-	cmd := exec.CommandContext(context.Background(), "sh", shArgs...)
+	cmd := exec.CommandContext(ctx, "sh", shArgs...)
+	if replaceShell {
+		configureCommandCancellation(cmd)
+	}
 
 	envPath := os.Getenv("PATH")
 

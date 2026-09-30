@@ -3,6 +3,7 @@ package framework
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"go.uber.org/mock/gomock"
@@ -11,6 +12,18 @@ import (
 	"github.com/aws/eks-anywhere/pkg/executables"
 	mockexecutables "github.com/aws/eks-anywhere/pkg/executables/mocks"
 )
+
+func TestBootstrapKubeconfigFilePath(t *testing.T) {
+	e := &ClusterE2ETest{
+		ClusterConfigFolder: "test",
+		ClusterName:         "cluster",
+	}
+
+	want := filepath.Join("test", "generated", "cluster.kind.kubeconfig")
+	if got := e.BootstrapKubeconfigFilePath(); got != want {
+		t.Fatalf("BootstrapKubeconfigFilePath() = %q, want %q", got, want)
+	}
+}
 
 func TestValidatePackageBundleControllerRegistry(t *testing.T) {
 	ctrl := gomock.NewController(t)
