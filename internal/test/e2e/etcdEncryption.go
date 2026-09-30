@@ -26,24 +26,26 @@ func (e *E2ESession) setupEtcdEncryption(testRegex string) error {
 		}
 	}
 
+	return e.installSSHPrivateKey()
+}
+
+func (e *E2ESession) installSSHPrivateKey() error {
 	sshPrivateKey, ok := os.LookupEnv(sshPrivateKeyVar)
 	if !ok {
-		return fmt.Errorf("required env var %s is not set", sshPrivateKey)
+		return fmt.Errorf("required env var %s is not set", sshPrivateKeyVar)
 	}
 
-	decodedKey, err := base64.StdEncoding.DecodeString(sshPrivateKey)
-	if err != nil {
+	if _, err := base64.StdEncoding.DecodeString(sshPrivateKey); err != nil {
 		return fmt.Errorf("decoding ssh key: %v", err)
 	}
 
-	command := fmt.Sprintf("sudo cat <<EOF>> %s\n%s\nEOF", e2etests.SSHKeyPath, string(decodedKey))
+	command := fmt.Sprintf(
+		"umask 077; printf '%%s' '%s' | base64 --decode > %s",
+		sshPrivateKey,
+		e2etests.SSHKeyPath,
+	)
 	if err := ssm.Run(e.session, logr.Discard(), e.instanceId, command, ssmTimeout); err != nil {
 		return fmt.Errorf("mounting ssh key in instance: %v", err)
-	}
-
-	command = fmt.Sprintf("sudo chmod 600 %s", e2etests.SSHKeyPath)
-	if err := ssm.Run(e.session, logr.Discard(), e.instanceId, command, ssmTimeout); err != nil {
-		return fmt.Errorf("setting permissions on ssh key: %v", err)
 	}
 
 	return nil

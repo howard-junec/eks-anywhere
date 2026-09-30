@@ -72,6 +72,7 @@ env:
     T_TINKERBELL_IMAGE_REDHAT_9_1_35: "tinkerbell_ci:image_redhat_9_1_35"
     T_TINKERBELL_IMAGE_REDHAT_9_1_36: "tinkerbell_ci:image_redhat_9_1_36"
     T_TINKERBELL_SSH_AUTHORIZED_KEY: "vsphere_ci_beta_connection:ssh_authorized_key"
+    T_SSH_PRIVATE_KEY: "vsphere_ci_beta_connection:base64_encoded_ssh_private_key"
     T_TINKERBELL_CP_NETWORK_CIDR: "tinkerbell_ci:cp_network_cidr"
     T_TINKERBELL_S3_INVENTORY_CSV_KEY: "tinkerbell_ci:s3_inventory_csv"
     T_TINKERBELL_S3_AG_INVENTORY_CSV_KEY: "tinkerbell_ci:s3_ag_inventory_csv"

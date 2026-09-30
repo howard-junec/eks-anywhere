@@ -342,6 +342,7 @@ func (c instanceRunConf) runPostTestsProcessing(e *E2ESession, testCommandResult
 			// For Tinkerbell tests we run multiple tests on the same instance.
 			// Hence upload fails for passed tests within the instance.
 			// TODO (pokearu): Find a way to only upload for failed tests within the instance.
+			e.collectRufioRetryNodeDiagnostics(testName)
 			e.uploadGeneratedFilesFromInstance(testName)
 			e.uploadDiagnosticArchiveFromInstance(testName)
 		}

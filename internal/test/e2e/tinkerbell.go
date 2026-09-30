@@ -102,6 +102,10 @@ func (e *E2ESession) setupTinkerbellEnv(testRegex string) error {
 		}
 	}
 	if testRegex == rufioHardOffRetryTestName {
+		if err := e.installSSHPrivateKey(); err != nil {
+			return fmt.Errorf("installing Tinkerbell diagnostic SSH key: %w", err)
+		}
+
 		candidateImage, err := prepareRufioCandidateImage(e.jobId)
 		if err != nil {
 			return fmt.Errorf("preparing Rufio candidate image: %w", err)
