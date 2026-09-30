@@ -46,7 +46,7 @@ const (
 	rufioRetryJitter                    = 10 * time.Second
 )
 
-func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing.T) {
+func TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror(t *testing.T) {
 	mirrorImage := os.Getenv(expectedTinkerbellMirrorImageEnv)
 	if mirrorImage == "" {
 		t.Fatalf("%s must identify the mirrored candidate image", expectedTinkerbellMirrorImageEnv)
@@ -62,8 +62,8 @@ func TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror(t *testing
 
 	test := framework.NewClusterE2ETest(
 		t,
-		framework.NewTinkerbell(t, framework.WithUbuntu136Tinkerbell()),
-		framework.WithClusterSingleNode(v1alpha1.Kube136),
+		framework.NewTinkerbell(t, framework.WithUbuntu135Tinkerbell()),
+		framework.WithClusterSingleNode(v1alpha1.Kube135),
 		framework.WithControlPlaneHardware(1),
 		framework.WithWorkerHardware(1),
 		framework.WithRegistryMirrorEndpointAndCert(constants.TinkerbellProviderName),

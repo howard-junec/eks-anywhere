@@ -56,7 +56,7 @@ const (
 	tinkerbellMirrorImageEnvVar                = "EXPECTED_TINKERBELL_MIRROR_IMAGE"
 	tinkerbellBundleImageEnvVar                = "EXPECTED_TINKERBELL_BUNDLE_IMAGE"
 	tinkerbellRuntimeDigestsEnvVar             = "EXPECTED_TINKERBELL_RUNTIME_DIGESTS"
-	rufioHardOffRetryTestName                  = "TestTinkerbellKubernetes136UbuntuRufioHardOffRetryRegistryMirror"
+	rufioHardOffRetryTestName                  = "TestTinkerbellKubernetes135UbuntuRufioHardOffRetryRegistryMirror"
 )
 
 type privateECRImage struct {
