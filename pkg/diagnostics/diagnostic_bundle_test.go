@@ -562,7 +562,7 @@ func TestTinkerbellHostCollectors(t *testing.T) {
 			Run: &diagnostics.Run{
 				CollectorName: "boots-logs",
 				Command:       "docker",
-				Args:          []string{"logs", "boots"},
+				Args:          []string{"logs", "smee"},
 				OutputDir:     "boots-logs",
 			},
 		},
